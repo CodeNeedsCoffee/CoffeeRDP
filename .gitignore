@@ -1,0 +1,13 @@
+build/
+
+# Throwaway spike code (see PLAN.md Phase 0) -- not part of CoffeeRDP proper
+spikes/
+
+# Local plan doc -- contains internal/work-specific details, not for the repo
+PLAN.md
+
+# Claude Code harness state
+.claude/
+
+*.o
+*.log
