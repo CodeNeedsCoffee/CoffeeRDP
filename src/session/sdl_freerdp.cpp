@@ -17,9 +17,11 @@
  * limitations under the License.
  */
 
+#include <algorithm>
 #include <iostream>
 #include <memory>
 #include <mutex>
+#include <tuple>
 
 #include <freerdp/config.h>
 
@@ -71,6 +73,7 @@
 #include "sdl_channels.hpp"
 #include "sdl_freerdp.hpp"
 #include "sdl_context.hpp"
+#include "coffee_quality.hpp"
 #include "sdl_monitor.hpp"
 #include "sdl_pointer.hpp"
 #include "sdl_prefs.hpp"
@@ -625,6 +628,84 @@ int main(int argc, char* argv[])
 		}
 	}
 
+	/* /quality: is resolved to a CoffeeQuality here, but deliberately NOT
+	 * applied to `settings` yet -- applying happens once, after the parse
+	 * call below succeeds. Two separate reasons force that ordering:
+	 *
+	 * 1. Any /quality:-shaped token is stripped from `args` before the
+	 *    parse call so the parser never sees it. FreeRDP's windows-vs-posix
+	 *    CLI syntax auto-detector (freerdp_client_detect_command_line() in
+	 *    cmdline.c) only scores argv tokens it recognizes from its own
+	 *    built-in argument table. A custom flag it doesn't know about --
+	 *    ours, or even the pre-existing sdl-allow-screensaver -- can, when
+	 *    it's the only argv token besides a bare .rdp filename (no /v: or
+	 *    other built-in flag to anchor detection), make the detector
+	 *    default to POSIX-style parsing, which doesn't accept '/' as a
+	 *    sigil -- reproduced directly with `coffee-rdp-session x.rdp
+	 *    /quality:best` and no other flags ("Invalid sigil").
+	 *
+	 * 2. Independent of (1): for a .rdp-file connection,
+	 *    freerdp_client_populate_settings_from_rdp_file() (file.c) runs
+	 *    *inside* the parse call below and, whenever the file doesn't carry
+	 *    an explicit "connection type" key -- true for every real-world
+	 *    .rdp file used here -- unconditionally resets FreeRDP_ConnectionType
+	 *    to CONNECTION_TYPE_AUTODETECT (as long as FreeRDP_NetworkAutoDetect
+	 *    defaults true, which it does), which cascades into FreeRDP
+	 *    recomputing FreeRDP_PerformanceFlags from a fixed set of booleans
+	 *    for that connection type. Anything set on `settings` *before* the
+	 *    parse call is silently discarded by this -- confirmed by comparing
+	 *    the values immediately before vs. immediately after the call
+	 *    during development. Only a value applied *after* parsing survives.
+	 *
+	 * A .rdp file's own `quality:s:<preset>` line is scanned the same way
+	 * FreeRDP's file parser has no hook for custom keys reachable from this
+	 * entry point (see coffee_quality_scan_rdp_file()) -- and an explicit
+	 * CLI flag takes priority over it, matching normal "last one wins" argv
+	 * semantics. Falls back to Balanced if neither is present. */
+	CoffeeQuality desiredQuality = CoffeeQuality::Balanced;
+
+	for (const char* a : args)
+	{
+		if (!a)
+			continue;
+		std::string path(a);
+		const bool isRdpFile =
+		    (path.size() > 4 && path.compare(path.size() - 4, 4, ".rdp") == 0) ||
+		    (path.size() > 5 && path.compare(path.size() - 5, 5, ".rdpw") == 0);
+		if (!isRdpFile)
+			continue;
+
+		if (auto q = coffee_quality_scan_rdp_file(path))
+		{
+			if (!coffee_quality_parse(*q, desiredQuality))
+				SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+				            "%s: quality:s:%s is not a recognized preset, ignoring", path.c_str(),
+				            q->c_str());
+		}
+		break;
+	}
+
+	args.erase(std::remove_if(args.begin(), args.end(),
+	                         [&](const char* a) {
+		                         if (!a)
+			                         return false;
+		                         for (const char* prefix : { "/quality:", "+quality:", "-quality:" })
+		                         {
+			                         if (strncmp(a, prefix, strlen(prefix)) == 0)
+			                         {
+				                         const char* value = a + strlen(prefix);
+				                         if (!coffee_quality_parse(value, desiredQuality))
+					                         SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+					                                     "'%s' is not a recognized quality preset, "
+					                                     "ignoring",
+					                                     value);
+				                         return true;
+			                         }
+		                         }
+		                         return false;
+	                         }),
+	           args.end());
+
 	auto status = freerdp_client_settings_parse_command_line_ex(
 	    settings, WINPR_ASSERTING_INT_CAST(int, args.size()), args.data(), FALSE, sdl->args(),
 	    sdl->argsCount(), &SdlContext::argumentHandler, sdl);
@@ -655,6 +736,13 @@ int main(int argc, char* argv[])
 		}
 		return rc;
 	}
+
+	/* Applied last, after every other settings source (CLI parsing, .rdp
+	 * file population, FreeRDP's own connection-type defaulting) has
+	 * already run -- see the comment above the parse call for why this
+	 * can't happen any earlier. */
+	if (!coffee_quality_apply(settings, desiredQuality))
+		return -1;
 
 	if (!SDL_SetHint(SDL_HINT_ALLOW_ALT_TAB_WHILE_GRABBED, "0"))
 		return -1;

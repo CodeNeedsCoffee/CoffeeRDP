@@ -19,6 +19,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <tuple>
 
 #include "sdl_context.hpp"
 #include "sdl_config.hpp"
@@ -36,7 +37,10 @@
 #include <aad/sdl_webview.hpp>
 #endif
 
+#include "coffee_quality.hpp"
+
 static constexpr auto sdl_allow_screensaver = "sdl-allow-screensaver";
+static constexpr auto coffee_quality_arg = "quality";
 
 SdlContext::SdlContext(rdpContext* context)
     : _context(context), _log(WLog_Get(CLIENT_TAG("SDL"))), _cursor(nullptr, sdl_Pointer_FreeCopy),
@@ -70,6 +74,16 @@ SdlContext::SdlContext(rdpContext* context)
 
 	_args.push_back({ sdl_allow_screensaver, COMMAND_LINE_VALUE_BOOL, nullptr, BoolValueFalse,
 	                  nullptr, -1, nullptr, "Allow local screensaver to activate" });
+
+	_args.push_back({ coffee_quality_arg, COMMAND_LINE_VALUE_REQUIRED,
+	                  "<speed|balanced|quality|best|auto>", "balanced", nullptr, -1, nullptr,
+	                  "Connection quality preset" });
+
+	/* Deliberately NOT applying a default preset here: anything set on
+	 * `settings` before FreeRDP's own command-line/.rdp-file parsing runs
+	 * gets silently overwritten by it (see the detailed comment in
+	 * sdl_freerdp.cpp's main(), where the quality preset is applied once,
+	 * correctly, after that parsing completes). */
 
 	/* Push a null element used as abort when iterating the array */
 	_args.push_back({ nullptr, 0, nullptr, nullptr, nullptr, -1, nullptr, nullptr });
@@ -1447,6 +1461,31 @@ int SdlContext::argumentHandler(const COMMAND_LINE_ARGUMENT_A* arg, void* custom
 					             SDL_GetError());
 					return -2;
 				}
+			}
+		}
+		else if (strcmp(arg->Name, coffee_quality_arg) == 0)
+		{
+			/* Normally unreachable: sdl_freerdp.cpp's main() strips every
+			 * /quality: token out of argv before it ever reaches
+			 * CommandLineParseArgumentsA (see the comment there for why --
+			 * a lone custom flag can trip FreeRDP's CLI-style
+			 * auto-detector). This entry stays registered so `--help`
+			 * lists it, and this branch stays in as a defensive fallback
+			 * in case that stripping ever misses a spelling of the flag. */
+			CoffeeQuality preset{};
+			if (!arg->Value || !coffee_quality_parse(arg->Value, preset))
+			{
+				SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+				             "/quality: unrecognized preset '%s', expected one of "
+				             "speed|balanced|quality|best|auto",
+				             arg->Value ? arg->Value : "(none)");
+				return -2;
+			}
+			if (!coffee_quality_apply(sdl->context()->settings, preset))
+			{
+				SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+				             "/quality: failed to apply preset '%s'", arg->Value);
+				return -2;
 			}
 		}
 	}

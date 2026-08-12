@@ -12,6 +12,14 @@ find_package(WinPR 3 REQUIRED)
 add_subdirectory(common)
 add_subdirectory(dialogs)
 
+# Own library so the preset mapping is testable in isolation (test/), without
+# pulling in SDL/dialogs/webview.
+add_library(coffee-quality STATIC coffee_quality.cpp coffee_quality.hpp)
+target_link_libraries(coffee-quality PUBLIC freerdp freerdp-client)
+
+enable_testing()
+add_subdirectory(test)
+
 set(SRCS
     sdl_types.hpp
     sdl_utils.cpp
@@ -59,6 +67,7 @@ target_link_libraries(${MODULE_NAME} PRIVATE
     sdl3-dialogs
     sdl-common-aad-view
     sdl-common-prefs
+    coffee-quality
     SDL3::SDL3
 )
 
