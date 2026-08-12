@@ -12,10 +12,20 @@ find_package(WinPR 3 REQUIRED)
 add_subdirectory(common)
 add_subdirectory(dialogs)
 
+# Shared .rdp key-scanning helper -- no SDL/FreeRDP dependency, used by both
+# libraries below (FreeRDP's own file parser has no custom-key hook reachable
+# from this client's entry point, see coffee_rdp_file.hpp).
+add_library(coffee-rdp-file STATIC coffee_rdp_file.cpp coffee_rdp_file.hpp)
+
 # Own library so the preset mapping is testable in isolation (test/), without
 # pulling in SDL/dialogs/webview.
 add_library(coffee-quality STATIC coffee_quality.cpp coffee_quality.hpp)
-target_link_libraries(coffee-quality PUBLIC freerdp freerdp-client)
+target_link_libraries(coffee-quality PUBLIC freerdp freerdp-client coffee-rdp-file)
+
+# Idle keep-alive timer/combo-parsing logic. No SDL/FreeRDP dependency at all
+# -- the actual key injection lives in sdl_context.cpp, which links this.
+add_library(coffee-idle STATIC coffee_idle.cpp coffee_idle.hpp)
+target_link_libraries(coffee-idle PUBLIC coffee-rdp-file)
 
 enable_testing()
 add_subdirectory(test)
@@ -68,6 +78,7 @@ target_link_libraries(${MODULE_NAME} PRIVATE
     sdl-common-aad-view
     sdl-common-prefs
     coffee-quality
+    coffee-idle
     SDL3::SDL3
 )
 

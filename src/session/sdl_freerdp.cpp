@@ -21,6 +21,7 @@
 #include <iostream>
 #include <memory>
 #include <mutex>
+#include <stdexcept>
 #include <tuple>
 
 #include <freerdp/config.h>
@@ -74,6 +75,7 @@
 #include "sdl_freerdp.hpp"
 #include "sdl_context.hpp"
 #include "coffee_quality.hpp"
+#include "coffee_idle.hpp"
 #include "sdl_monitor.hpp"
 #include "sdl_pointer.hpp"
 #include "sdl_prefs.hpp"
@@ -302,6 +304,13 @@ static void sdl_term_handler([[maybe_unused]] int signum, [[maybe_unused]] const
 						break;
 				}
 			}
+
+			/* SDL_WaitEventTimeout() above returns after ~1s of no events,
+			 * which is exactly the periodic tick the idle keep-alive needs
+			 * -- no separate timer/thread required. Skipped during
+			 * shutdown so we don't inject a keypress while tearing down. */
+			if (!sdl->shallAbort())
+				sdl->checkIdleKeepAlive();
 		}
 		rc = 1;
 	}
@@ -661,9 +670,15 @@ int main(int argc, char* argv[])
 	 * FreeRDP's file parser has no hook for custom keys reachable from this
 	 * entry point (see coffee_quality_scan_rdp_file()) -- and an explicit
 	 * CLI flag takes priority over it, matching normal "last one wins" argv
-	 * semantics. Falls back to Balanced if neither is present. */
-	CoffeeQuality desiredQuality = CoffeeQuality::Balanced;
-
+	 * semantics. Falls back to Balanced if neither is present.
+	 *
+	 * The idle keep-alive flags below (/idle-keypress-time:,
+	 * /idle-keypress-combo:) get the same argv-stripping treatment for
+	 * reason (1), but -- unlike quality -- are applied to `sdl` directly
+	 * and immediately, not deferred past the parse call: they're
+	 * SdlContext's own state, not `rdpSettings`, so reason (2) doesn't
+	 * apply to them. */
+	std::string rdpFilePath;
 	for (const char* a : args)
 	{
 		if (!a)
@@ -672,17 +687,23 @@ int main(int argc, char* argv[])
 		const bool isRdpFile =
 		    (path.size() > 4 && path.compare(path.size() - 4, 4, ".rdp") == 0) ||
 		    (path.size() > 5 && path.compare(path.size() - 5, 5, ".rdpw") == 0);
-		if (!isRdpFile)
-			continue;
+		if (isRdpFile)
+		{
+			rdpFilePath = path;
+			break;
+		}
+	}
 
-		if (auto q = coffee_quality_scan_rdp_file(path))
+	CoffeeQuality desiredQuality = CoffeeQuality::Balanced;
+	if (!rdpFilePath.empty())
+	{
+		if (auto q = coffee_quality_scan_rdp_file(rdpFilePath))
 		{
 			if (!coffee_quality_parse(*q, desiredQuality))
 				SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
-				            "%s: quality:s:%s is not a recognized preset, ignoring", path.c_str(),
-				            q->c_str());
+				            "%s: quality:s:%s is not a recognized preset, ignoring",
+				            rdpFilePath.c_str(), q->c_str());
 		}
-		break;
 	}
 
 	args.erase(std::remove_if(args.begin(), args.end(),
@@ -705,6 +726,66 @@ int main(int argc, char* argv[])
 		                         return false;
 	                         }),
 	           args.end());
+
+	unsigned idleSeconds = 30;
+	std::string idleCombo = "alt+tab";
+	if (!rdpFilePath.empty())
+	{
+		if (auto t = coffee_idle_scan_rdp_file_time(rdpFilePath))
+		{
+			try
+			{
+				idleSeconds = static_cast<unsigned>(std::stoul(*t));
+			}
+			catch (const std::exception&)
+			{
+				SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+				            "%s: idle keypress time:s:%s is not a number, ignoring",
+				            rdpFilePath.c_str(), t->c_str());
+			}
+		}
+		if (auto c = coffee_idle_scan_rdp_file_combo(rdpFilePath))
+			idleCombo = *c;
+	}
+
+	args.erase(
+	    std::remove_if(
+	        args.begin(), args.end(),
+	        [&](const char* a) {
+		        if (!a)
+			        return false;
+		        for (const char* prefix : { "/idle-keypress-time:", "+idle-keypress-time:",
+		                                   "-idle-keypress-time:" })
+		        {
+			        if (strncmp(a, prefix, strlen(prefix)) == 0)
+			        {
+				        const char* value = a + strlen(prefix);
+				        try
+				        {
+					        idleSeconds = static_cast<unsigned>(std::stoul(value));
+				        }
+				        catch (const std::exception&)
+				        {
+					        SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+					                    "/idle-keypress-time: '%s' is not a number, ignoring", value);
+				        }
+				        return true;
+			        }
+		        }
+		        for (const char* prefix : { "/idle-keypress-combo:", "+idle-keypress-combo:",
+		                                   "-idle-keypress-combo:" })
+		        {
+			        if (strncmp(a, prefix, strlen(prefix)) == 0)
+			        {
+				        idleCombo = a + strlen(prefix);
+				        return true;
+			        }
+		        }
+		        return false;
+	        }),
+	    args.end());
+
+	sdl->configureIdleKeepAlive(idleSeconds, idleCombo);
 
 	auto status = freerdp_client_settings_parse_command_line_ex(
 	    settings, WINPR_ASSERTING_INT_CAST(int, args.size()), args.data(), FALSE, sdl->args(),

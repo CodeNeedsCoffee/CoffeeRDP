@@ -41,6 +41,8 @@
 
 static constexpr auto sdl_allow_screensaver = "sdl-allow-screensaver";
 static constexpr auto coffee_quality_arg = "quality";
+static constexpr auto coffee_idle_time_arg = "idle-keypress-time";
+static constexpr auto coffee_idle_combo_arg = "idle-keypress-combo";
 
 SdlContext::SdlContext(rdpContext* context)
     : _context(context), _log(WLog_Get(CLIENT_TAG("SDL"))), _cursor(nullptr, sdl_Pointer_FreeCopy),
@@ -78,6 +80,14 @@ SdlContext::SdlContext(rdpContext* context)
 	_args.push_back({ coffee_quality_arg, COMMAND_LINE_VALUE_REQUIRED,
 	                  "<speed|balanced|quality|best|auto>", "balanced", nullptr, -1, nullptr,
 	                  "Connection quality preset" });
+
+	_args.push_back({ coffee_idle_time_arg, COMMAND_LINE_VALUE_REQUIRED, "<seconds>", "30", nullptr,
+	                  -1, nullptr,
+	                  "Send a keepalive keypress after this many seconds of local inactivity (0 "
+	                  "disables)" });
+
+	_args.push_back({ coffee_idle_combo_arg, COMMAND_LINE_VALUE_REQUIRED, "<key+key+...>", "alt+tab",
+	                  nullptr, -1, nullptr, "Key combo to send for the idle keepalive" });
 
 	/* Deliberately NOT applying a default preset here: anything set on
 	 * `settings` before FreeRDP's own command-line/.rdp-file parsing runs
@@ -1390,6 +1400,29 @@ bool SdlContext::handleEvent(const SDL_Event& ev)
 
 	switch (ev.type)
 	{
+		/* Real user input, for the idle keep-alive timer (see
+		 * checkIdleKeepAlive()): resetting here, on the actual SDL events,
+		 * rather than on anything we inject ourselves, is what makes this
+		 * genuinely idle-triggered instead of Remmina's "periodic every N
+		 * seconds regardless of activity" bug -- our own injected keypress
+		 * never becomes an SDL_Event, so it can't reset its own timer. */
+		case SDL_EVENT_FINGER_DOWN:
+		case SDL_EVENT_FINGER_UP:
+		case SDL_EVENT_FINGER_MOTION:
+		case SDL_EVENT_MOUSE_MOTION:
+		case SDL_EVENT_MOUSE_BUTTON_DOWN:
+		case SDL_EVENT_MOUSE_BUTTON_UP:
+		case SDL_EVENT_MOUSE_WHEEL:
+		case SDL_EVENT_KEY_DOWN:
+		case SDL_EVENT_KEY_UP:
+			_idleTimer.noteInput();
+			break;
+		default:
+			break;
+	}
+
+	switch (ev.type)
+	{
 		case SDL_EVENT_FINGER_DOWN:
 		case SDL_EVENT_FINGER_UP:
 		case SDL_EVENT_FINGER_MOTION:
@@ -1428,6 +1461,70 @@ bool SdlContext::handleEvent(const SDL_Event& ev)
 		default:
 			return true;
 	}
+}
+
+void SdlContext::configureIdleKeepAlive(unsigned intervalSeconds, const std::string& combo)
+{
+	_idleComboRdpScancodes.clear();
+	_idleTimer.configure(intervalSeconds);
+
+	if (intervalSeconds == 0)
+		return;
+
+	auto names = coffee_idle_parse_combo(combo);
+	if (names.empty())
+	{
+		WLog_Print(getWLog(), WLOG_WARN,
+		           "idle keep-alive: combo '%s' is empty, disabling keep-alive", combo.c_str());
+		_idleTimer.configure(0);
+		return;
+	}
+
+	std::vector<UINT32> scancodes;
+	for (const auto& name : names)
+	{
+		SDL_Scancode sc = SDL_GetScancodeFromName(name.c_str());
+		if (sc == SDL_SCANCODE_UNKNOWN)
+		{
+			WLog_Print(getWLog(), WLOG_WARN,
+			           "idle keep-alive: unrecognized key '%s' in combo '%s', disabling keep-alive",
+			           name.c_str(), combo.c_str());
+			_idleTimer.configure(0);
+			return;
+		}
+
+		UINT32 rdp = _input.scancode_to_rdp(sc);
+		if (rdp == RDP_SCANCODE_UNKNOWN)
+		{
+			WLog_Print(getWLog(), WLOG_WARN,
+			           "idle keep-alive: '%s' has no RDP scancode mapping, disabling keep-alive",
+			           name.c_str());
+			_idleTimer.configure(0);
+			return;
+		}
+		scancodes.push_back(rdp);
+	}
+
+	_idleComboRdpScancodes = std::move(scancodes);
+	WLog_Print(getWLog(), WLOG_INFO, "idle keep-alive: '%s' every %us of inactivity", combo.c_str(),
+	           intervalSeconds);
+}
+
+void SdlContext::checkIdleKeepAlive()
+{
+	if (!isConnected() || _idleComboRdpScancodes.empty())
+		return;
+
+	if (!_idleTimer.due())
+		return;
+
+	WLog_Print(getWLog(), WLOG_DEBUG, "idle keep-alive: session idle, sending configured combo");
+
+	auto* input = context()->input;
+	for (auto scancode : _idleComboRdpScancodes)
+		std::ignore = freerdp_input_send_keyboard_event_ex(input, TRUE, FALSE, scancode);
+	for (auto it = _idleComboRdpScancodes.rbegin(); it != _idleComboRdpScancodes.rend(); ++it)
+		std::ignore = freerdp_input_send_keyboard_event_ex(input, FALSE, FALSE, *it);
 }
 
 COMMAND_LINE_ARGUMENT_A* SdlContext::args()
@@ -1487,6 +1584,21 @@ int SdlContext::argumentHandler(const COMMAND_LINE_ARGUMENT_A* arg, void* custom
 				             "/quality: failed to apply preset '%s'", arg->Value);
 				return -2;
 			}
+		}
+		else if ((strcmp(arg->Name, coffee_idle_time_arg) == 0) ||
+		         (strcmp(arg->Name, coffee_idle_combo_arg) == 0))
+		{
+			/* Also normally unreachable, same reasoning as coffee_quality_arg
+			 * above -- main() strips both idle-keypress flags out of argv
+			 * and applies them as a pair via configureIdleKeepAlive() before
+			 * the parse call that would reach this handler. No sensible
+			 * partial-reconfigure to do here since the two flags are only
+			 * meaningful together, so this just flags that the stripping
+			 * was bypassed somehow. */
+			SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+			            "/%s reached argumentHandler instead of being pre-applied in main() -- "
+			            "idle keep-alive may not be configured as expected",
+			            arg->Name);
 		}
 	}
 	return 0;

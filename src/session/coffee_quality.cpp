@@ -1,9 +1,8 @@
 #include "coffee_quality.hpp"
+#include "coffee_rdp_file.hpp"
 
 #include <algorithm>
 #include <cctype>
-#include <fstream>
-#include <sstream>
 
 #include <freerdp/settings.h>
 #include <freerdp/client/cmdline.h>
@@ -111,33 +110,5 @@ bool coffee_quality_apply(rdpSettings* settings, CoffeeQuality preset)
 
 std::optional<std::string> coffee_quality_scan_rdp_file(const std::string& path)
 {
-	std::ifstream in(path);
-	if (!in.is_open())
-		return std::nullopt;
-
-	std::string line;
-	while (std::getline(in, line))
-	{
-		// Matches FreeRDP's own .rdp line format (client/common/file.c
-		// parse_line()): "name:type:value", type is a single character.
-		auto d1 = line.find(':');
-		if (d1 == std::string::npos)
-			continue;
-		auto d2 = line.find(':', d1 + 1);
-		if (d2 == std::string::npos || d2 - d1 != 2)
-			continue;
-
-		std::string name = line.substr(0, d1);
-		char type = line[d1 + 1];
-		std::string value = line.substr(d2 + 1);
-		while (!value.empty() && (value.back() == '\r' || value.back() == '\n'))
-			value.pop_back();
-
-		std::transform(name.begin(), name.end(), name.begin(),
-		               [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-
-		if (type == 's' && name == "quality")
-			return value;
-	}
-	return std::nullopt;
+	return coffee_rdp_file_scan_key(path, "quality");
 }

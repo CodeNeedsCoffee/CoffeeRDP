@@ -62,12 +62,15 @@ class sdlInput
 	[[nodiscard]] static uint32_t prefKeyValue(const std::string& key,
 	                                           uint32_t fallback = SDL_SCANCODE_UNKNOWN);
 
+	/** Public so SdlContext::configureIdleKeepAlive() can resolve a
+	 *  configured key combo to RDP scancodes the same way real keypresses
+	 *  are translated (see handleEvent(const SDL_KeyboardEvent&)). */
+	[[nodiscard]] UINT32 scancode_to_rdp(Uint32 scancode);
+
   private:
 	[[nodiscard]] static std::list<std::string> tokenize(const std::string& data,
 	                                                     const std::string& delimiter = ",");
 	[[nodiscard]] static bool extract(const std::string& token, uint32_t& key, uint32_t& value);
-
-	[[nodiscard]] UINT32 scancode_to_rdp(Uint32 scancode);
 
 	SdlContext* _sdl = nullptr;
 	Uint32 _lastWindowID = 0;

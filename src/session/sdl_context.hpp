@@ -38,6 +38,8 @@
 #include "sdl_clip.hpp"
 #include "sdl_input.hpp"
 
+#include "coffee_idle.hpp"
+
 #include "dialogs/sdl_connection_dialog_wrapper.hpp"
 
 class SdlContext
@@ -157,6 +159,18 @@ class SdlContext
 	[[nodiscard]] bool credentialsRead() const;
 	void setCredentialsRead();
 
+	/** intervalSeconds == 0 disables the idle keep-alive. `combo` is a
+	 *  '+'-separated key combo string (e.g. "alt+tab", see
+	 *  coffee_idle_parse_combo()). An unrecognized key name disables the
+	 *  keep-alive with a warning rather than failing the connection. */
+	void configureIdleKeepAlive(unsigned intervalSeconds, const std::string& combo);
+
+	/** Called from the main event loop on every iteration where no real
+	 *  input arrived (see sdl_freerdp.cpp's sdl_run()) -- fires the
+	 *  configured combo once the idle interval has elapsed, and keeps
+	 *  firing periodically through sustained idleness. */
+	void checkIdleKeepAlive();
+
   private:
 	[[nodiscard]] bool resizeToScale(SdlWindow* window);
 	[[nodiscard]] bool useLocalScale() const;
@@ -246,4 +260,7 @@ class SdlContext
 	std::vector<COMMAND_LINE_ARGUMENT_A> _args;
 	std::vector<rdpPointer*> _valid_pointers;
 	bool _credentialsRead = false;
+
+	CoffeeIdleTimer _idleTimer;
+	std::vector<UINT32> _idleComboRdpScancodes;
 };
