@@ -37,6 +37,7 @@
 #include <cerrno>
 #include <cstdio>
 #include <cstring>
+#include <unistd.h>
 
 #if defined(__cpp_lib_source_location) && (__cpp_lib_source_location >= 201907L)
 #include <source_location>
@@ -649,6 +650,68 @@ bool handleLogoutFlag(int argc, char* argv[])
 		           static_cast<unsigned long long>(removed), removed == 1 ? "entry" : "entries");
 	return true;
 }
+
+/** --display-backend:wayland|x11 (PLAN.md section 5.3). The plan originally
+ *  called for a capability probe plus a silent-if-unavailable auto-fallback
+ *  -- built to guard against two specific Wayland risks (multimon placement,
+ *  Super key capture) that Phase 5 confirmed both actually work on this
+ *  target environment (GNOME/Mutter). Building the fuller probe-and-fallback
+ *  machinery for a failure mode that doesn't reproduce here would be
+ *  guessing at a future requirement, so this is deliberately just an
+ *  explicit override: Wayland is whatever the session naturally provides,
+ *  `x11` is a manual escape hatch (re-exec with SDL_VIDEODRIVER=x11) for a
+ *  compositor or situation where it's ever needed again. Logged, never
+ *  silent, matching section 3's principle even in this simpler form.
+ *
+ *  Re-execs (and does not return) if switching to X11; otherwise returns so
+ *  main() continues normally. Runs before the FreeRDP context is created,
+ *  same as --logout. */
+void handleDisplayBackendFlag(int argc, char* argv[])
+{
+	static constexpr auto prefix = "--display-backend:";
+	std::string requested;
+	for (int i = 1; i < argc; i++)
+	{
+		if (std::strncmp(argv[i], prefix, std::strlen(prefix)) == 0)
+		{
+			requested = argv[i] + std::strlen(prefix);
+			break;
+		}
+	}
+
+	if (requested.empty() || requested == "wayland")
+		return;
+
+	if (requested != "x11")
+	{
+		std::fprintf(stderr, "--display-backend: '%s' not recognized, expected wayland or x11\n",
+		            requested.c_str());
+		return;
+	}
+
+	const char* current = std::getenv("SDL_VIDEODRIVER");
+	if (current && std::strcmp(current, "x11") == 0)
+		return; // Already there -- nothing to do.
+
+	std::fprintf(stderr, "--display-backend:x11 -- switching to X11 (SDL_VIDEODRIVER=x11)\n");
+	setenv("SDL_VIDEODRIVER", "x11", 1);
+
+	std::vector<char*> newArgv;
+	newArgv.reserve(static_cast<size_t>(argc));
+	for (int i = 0; i < argc; i++)
+	{
+		if (std::strncmp(argv[i], prefix, std::strlen(prefix)) == 0)
+			continue;
+		newArgv.push_back(argv[i]);
+	}
+	newArgv.push_back(nullptr);
+
+	execv("/proc/self/exe", newArgv.data());
+	// execv() only returns on failure -- fall through and run under the
+	// original (Wayland) driver rather than aborting the connection outright.
+	std::fprintf(stderr, "--display-backend:x11: re-exec failed: %s -- continuing without it\n",
+	            strerror(errno));
+}
 } // namespace
 
 int main(int argc, char* argv[])
@@ -659,6 +722,8 @@ int main(int argc, char* argv[])
 
 	if (handleLogoutFlag(argc, argv))
 		return 0;
+
+	handleDisplayBackendFlag(argc, argv); // re-execs and does not return if switching to X11
 
 	int rc = -1;
 	RDP_CLIENT_ENTRY_POINTS clientEntryPoints = {};
@@ -690,6 +755,17 @@ int main(int argc, char* argv[])
 			args.push_back(rdp_file.data());
 		}
 	}
+
+	/* --display-backend: is a CoffeeRDP-level flag, fully handled above by
+	 * handleDisplayBackendFlag() before FreeRDP's parser ever runs -- strip
+	 * it out here for the same reason /quality: and /idle-keypress-*: are
+	 * stripped below (a lone unrecognized custom flag can trip FreeRDP's
+	 * CLI-style auto-detector into rejecting '/' as a sigil entirely). */
+	args.erase(std::remove_if(args.begin(), args.end(),
+	                         [](const char* a) {
+		                         return a && strncmp(a, "--display-backend:", 18) == 0;
+	                         }),
+	           args.end());
 
 	/* /quality: is resolved to a CoffeeQuality here, but deliberately NOT
 	 * applied to `settings` yet -- applying happens once, after the parse

@@ -212,13 +212,13 @@ void SdlWindow::fullscreen(bool enter, bool forceOriginalDisplay)
 {
 	if (enter && forceOriginalDisplay && _displayID != 0)
 	{
-		/* Move the window to the desired display. We should not wait
-		 * for the window to be moved, because some backends can refuse
-		 * the move. The intent of moving the window is enough for SDL
-		 * to decide which display will be used for fullscreen. */
-		SDL_Rect rect = {};
-		std::ignore = SDL_GetDisplayBounds(_displayID, &rect);
-		std::ignore = SDL_SetWindowPosition(_window, rect.x, rect.y);
+		/* SDL_SetWindowPosition() is a no-op for placement on Wayland (it
+		 * only affects X11); SDL_SetWindowFullscreenMode() with a mode
+		 * carrying the target SDL_DisplayID is the only mechanism honored
+		 * on both backends -- see SdlWindow::create() for the same fix
+		 * applied at initial window creation. */
+		const SDL_DisplayMode* mode = SDL_GetDesktopDisplayMode(_displayID);
+		std::ignore = SDL_SetWindowFullscreenMode(_window, mode);
 	}
 	std::ignore = SDL_SetWindowFullscreen(_window, enter);
 	std::ignore = SDL_SyncWindow(_window);
@@ -558,21 +558,39 @@ SdlWindow SdlWindow::create(SDL_DisplayID id, const std::string& title, Uint32 f
 {
 	flags |= SDL_WINDOW_HIGH_PIXEL_DENSITY;
 
+	const bool wantFullscreen = (flags & SDL_WINDOW_FULLSCREEN) != 0;
+
+	/* Wayland toplevels cannot be positioned by the client -- neither the
+	 * SDL_WINDOWPOS_CENTERED_DISPLAY hint below nor a later
+	 * SDL_SetWindowPosition() call has any effect on placement there, only
+	 * on X11. The only cross-backend way to put a window on a *specific*
+	 * display is SDL_SetWindowFullscreenMode() + SDL_SetWindowFullscreen(),
+	 * which on Wayland maps to xdg_toplevel_set_fullscreen(surface, output)
+	 * using the SDL_DisplayID carried by the SDL_DisplayMode. So: create the
+	 * window un-flagged, then explicitly enter fullscreen on the target
+	 * display afterwards instead of asking for it at creation time. */
+	flags &= ~static_cast<Uint32>(SDL_WINDOW_FULLSCREEN);
+
 	SDL_Rect rect = { static_cast<int>(SDL_WINDOWPOS_CENTERED_DISPLAY(id)),
 		              static_cast<int>(SDL_WINDOWPOS_CENTERED_DISPLAY(id)), static_cast<int>(width),
 		              static_cast<int>(height) };
 
-	if ((flags & SDL_WINDOW_FULLSCREEN) != 0)
+	if (wantFullscreen)
 	{
 		std::ignore = SDL_GetDisplayBounds(id, &rect);
 	}
 
 	SdlWindow window{ id, title, rect, flags };
 
-	if ((flags & SDL_WINDOW_FULLSCREEN) != 0)
+	if (wantFullscreen)
 	{
 		window.setOffsetX(rect.x);
 		window.setOffsetY(rect.y);
+
+		const SDL_DisplayMode* mode = SDL_GetDesktopDisplayMode(id);
+		std::ignore = SDL_SetWindowFullscreenMode(window.window(), mode);
+		std::ignore = SDL_SetWindowFullscreen(window.window(), true);
+		std::ignore = SDL_SyncWindow(window.window());
 	}
 
 	return window;

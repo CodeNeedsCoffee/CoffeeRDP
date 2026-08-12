@@ -439,15 +439,17 @@ bool SdlContext::createWindows()
 
 		Uint32 flags = SDL_WINDOW_HIGH_PIXEL_DENSITY;
 
-		if (freerdp_settings_get_bool(settings, FreeRDP_Fullscreen) &&
-		    !freerdp_settings_get_bool(settings, FreeRDP_UseMultimon))
+		if (freerdp_settings_get_bool(settings, FreeRDP_Fullscreen) ||
+		    freerdp_settings_get_bool(settings, FreeRDP_UseMultimon))
 		{
+			/* Multimon used to request SDL_WINDOW_BORDERLESS sized to the
+			 * monitor and rely on window position for per-display placement.
+			 * That only ever worked on X11 -- Wayland ignores window
+			 * position outright, so every monitor's window landed wherever
+			 * the compositor felt like putting it. Real per-display
+			 * SDL_WINDOW_FULLSCREEN (handled in SdlWindow::create() via
+			 * SDL_SetWindowFullscreenMode) is honored on both backends. */
 			flags |= SDL_WINDOW_FULLSCREEN;
-		}
-
-		if (freerdp_settings_get_bool(settings, FreeRDP_UseMultimon))
-		{
-			flags |= SDL_WINDOW_BORDERLESS;
 		}
 
 		if (!freerdp_settings_get_bool(settings, FreeRDP_Decorations))
