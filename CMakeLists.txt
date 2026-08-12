@@ -8,3 +8,4 @@ set(CMAKE_CXX_EXTENSIONS ON)
 enable_testing()
 
 add_subdirectory(src/session)
+add_subdirectory(src/auth)

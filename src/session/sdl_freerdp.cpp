@@ -18,6 +18,8 @@
  */
 
 #include <algorithm>
+#include <cstdlib>
+#include <filesystem>
 #include <iostream>
 #include <memory>
 #include <mutex>
@@ -600,11 +602,63 @@ static void SDLCALL rdp_file_cb(void* userdata, const char* const* filelist,
 	return rdp;
 }
 
+namespace
+{
+/** Same path coffee-rdp-auth computes (stateDir() there, via glib's
+ *  g_get_user_data_dir()) -- reimplemented here rather than linking glib
+ *  into coffee-rdp-session just for this one path. */
+std::string coffeeStateDir()
+{
+	const char* xdgDataHome = std::getenv("XDG_DATA_HOME");
+	if (xdgDataHome && *xdgDataHome)
+		return std::string(xdgDataHome) + "/coffeerdp";
+
+	const char* home = std::getenv("HOME");
+	return std::string(home ? home : "") + "/.local/share/coffeerdp";
+}
+
+/** Returns true if argv asked for --logout, in which case it's already been
+ *  fully handled (state wiped, message printed) and main() should exit
+ *  immediately without creating any FreeRDP context or attempting a
+ *  connection -- checked before any of that setup happens. There's no
+ *  cached refresh token to also wipe (PLAN.md section 4, task 4.4: the
+ *  RDS-AAD scope never requests offline_access, so Entra never issues one
+ *  for this flow) -- the persistent cookie jar is the only state to clear. */
+bool handleLogoutFlag(int argc, char* argv[])
+{
+	bool logout = false;
+	for (int i = 1; i < argc; i++)
+	{
+		if (std::strcmp(argv[i], "--logout") == 0)
+		{
+			logout = true;
+			break;
+		}
+	}
+	if (!logout)
+		return false;
+
+	auto webkitDir = coffeeStateDir() + "/webkit";
+	std::error_code ec;
+	auto removed = std::filesystem::remove_all(webkitDir, ec);
+	if (ec)
+		std::fprintf(stderr, "coffee-rdp-session --logout: failed to remove %s: %s\n",
+		            webkitDir.c_str(), ec.message().c_str());
+	else
+		std::printf("coffee-rdp-session --logout: removed %s (%llu %s)\n", webkitDir.c_str(),
+		           static_cast<unsigned long long>(removed), removed == 1 ? "entry" : "entries");
+	return true;
+}
+} // namespace
+
 int main(int argc, char* argv[])
 {
 #if defined(_WIN32)
 	sdl::win32::release_transient_console();
 #endif
+
+	if (handleLogoutFlag(argc, argv))
+		return 0;
 
 	int rc = -1;
 	RDP_CLIENT_ENTRY_POINTS clientEntryPoints = {};

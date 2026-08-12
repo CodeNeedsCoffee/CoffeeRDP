@@ -1,179 +1,142 @@
 /**
- * FreeRDP: A Remote Desktop Protocol Implementation
- * Popup browser for AAD authentication
+ * CoffeeRDP: AAD login popup, spawned as a separate process
  *
- * Copyright 2023 Isaac Klein <fifthdegree@protonmail.com>
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *		 http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * This used to run akallabeth/webview in-process (GTK3, via CMake
+ * FetchContent). Replaced per PLAN.md section 4: GTK3 and GTK4 can't share a
+ * process, and a WebKit crash here used to take the whole RDP session down
+ * with it. coffee-rdp-auth (GTK4 + webkitgtk6.0, its own binary, built
+ * alongside this one) now does the actual login UI and persistent cookie
+ * jar; this file just spawns it and reads the authorization code back over
+ * a pipe. Same public interface (webview_impl_run()) as before, so
+ * sdl_webview.cpp -- which already correctly builds the AAD/AVD URLs via
+ * FreeRDP's own freerdp_client_get_aad_url() -- needed no changes at all.
  */
 
-#include <webview.h>
-
 #include "webview_impl.hpp"
-#include <algorithm>
-#include <cassert>
-#include <cctype>
-#include <map>
-#include <regex>
-#include <sstream>
+
+#include <cerrno>
+#include <cstring>
 #include <string>
-#include <vector>
+
+#include <unistd.h>
+#include <sys/wait.h>
 
 #include <freerdp/log.h>
-#include <winpr/string.h>
 
-#define TAG FREERDP_TAG("client.SDL.common.aad")
+#define TAG FREERDP_TAG("client.session.aad")
 
-class fkt_arg
+namespace
 {
-  public:
-	fkt_arg(const std::string& url)
-	{
-		auto args = urlsplit(url);
-		auto redir = args.find("redirect_uri");
-		if (redir == args.end())
-		{
-			WLog_ERR(TAG,
-			         "[Webview] url %s does not contain a redirect_uri parameter, "
-			         "aborting.",
-			         url.c_str());
-		}
-		else
-		{
-			_redirect_uri = from_url_encoded_str(redir->second);
-		}
-	}
-
-	bool valid() const
-	{
-		return !_redirect_uri.empty();
-	}
-
-	bool getCode(std::string& c) const
-	{
-		c = _code;
-		return !c.empty();
-	}
-
-	bool handle(const std::string& uri) const
-	{
-		std::string duri = from_url_encoded_str(uri);
-		if (duri.length() < _redirect_uri.length())
-			return false;
-		auto rc = _strnicmp(duri.c_str(), _redirect_uri.c_str(), _redirect_uri.length());
-		return rc == 0;
-	}
-
-	bool parse(const std::string& uri)
-	{
-		_args = urlsplit(uri);
-		auto err = _args.find("error");
-		if (err != _args.end())
-		{
-			auto suberr = _args.find("error_subcode");
-			WLog_ERR(TAG, "[Webview] %s: %s, %s: %s", err->first.c_str(), err->second.c_str(),
-			         suberr->first.c_str(), suberr->second.c_str());
-			return false;
-		}
-		auto val = _args.find("code");
-		if (val == _args.end())
-		{
-			WLog_ERR(TAG, "[Webview] no code parameter detected in redirect URI %s", uri.c_str());
-			return false;
-		}
-
-		_code = val->second;
-		return true;
-	}
-
-  protected:
-	static std::string from_url_encoded_str(const std::string& str)
-	{
-		std::string cxxstr;
-		auto cstr = winpr_str_url_decode(str.c_str(), str.length());
-		if (cstr)
-		{
-			cxxstr = std::string(cstr);
-			free(cstr);
-		}
-		return cxxstr;
-	}
-
-	static std::vector<std::string> split(const std::string& input, const std::string& regex)
-	{
-		// passing -1 as the submatch index parameter performs splitting
-		std::regex re(regex);
-		std::sregex_token_iterator first{ input.begin(), input.end(), re, -1 };
-		std::sregex_token_iterator last;
-		return { first, last };
-	}
-
-	static std::map<std::string, std::string> urlsplit(const std::string& url)
-	{
-		auto pos = url.find('?');
-		if (pos == std::string::npos)
-			return {};
-
-		pos++; // skip '?'
-		auto surl = url.substr(pos);
-		auto args = split(surl, "&");
-
-		std::map<std::string, std::string> argmap;
-		for (const auto& arg : args)
-		{
-			auto kv = split(arg, "=");
-			if (kv.size() == 2)
-				argmap.insert({ kv[0], kv[1] });
-		}
-
-		return argmap;
-	}
-
-  private:
-	std::string _redirect_uri;
-	std::string _code;
-	std::map<std::string, std::string> _args;
-};
-
-static void fkt(webview_t webview, const char* uri, webview_navigation_event_t type, void* arg)
+bool isExecutable(const std::string& path)
 {
-	assert(arg);
-	auto rcode = static_cast<fkt_arg*>(arg);
-
-	if (type != WEBVIEW_LOAD_FINISHED)
-		return;
-
-	if (!rcode->handle(uri))
-		return;
-
-	(void)rcode->parse(uri);
-	webview_terminate(webview);
+	return !path.empty() && (access(path.c_str(), X_OK) == 0);
 }
+
+/** Same directory as this running binary -- the layout `ninja install`
+ *  produces, coffee-rdp-session and coffee-rdp-auth side by side. */
+std::string selfExeDir()
+{
+	char buf[4096];
+	ssize_t len = readlink("/proc/self/exe", buf, sizeof(buf) - 1);
+	if (len <= 0)
+		return "";
+	buf[len] = '\0';
+	std::string path(buf);
+	auto pos = path.find_last_of('/');
+	return (pos == std::string::npos) ? "" : path.substr(0, pos);
+}
+
+/** Locates coffee-rdp-auth: next to this binary (installed layout), then
+ *  the build-tree sibling directory (uninstalled dev builds, so `ninja` is
+ *  enough to test without `ninja install` first), then finally just the bare
+ *  name for execvp()'s own PATH search. execlp() below handles all three
+ *  uniformly -- a path containing '/' is exec'd directly, a bare name is
+ *  PATH-searched. */
+std::string findAuthHelper()
+{
+	auto dir = selfExeDir();
+	if (!dir.empty())
+	{
+		std::string candidate = dir + "/coffee-rdp-auth";
+		if (isExecutable(candidate))
+			return candidate;
+	}
+
+#if defined(COFFEE_RDP_AUTH_BUILD_PATH)
+	if (isExecutable(COFFEE_RDP_AUTH_BUILD_PATH))
+		return COFFEE_RDP_AUTH_BUILD_PATH;
+#endif
+
+	return "coffee-rdp-auth";
+}
+} // namespace
 
 bool webview_impl_run(const std::string& title, const std::string& url, std::string& code)
 {
-	webview::webview w(false, nullptr);
+	auto helper = findAuthHelper();
 
-	w.set_title(title);
-	w.set_size(800, 600, WEBVIEW_HINT_NONE);
-
-	fkt_arg arg(url);
-	if (!arg.valid())
+	int pipefd[2] = { -1, -1 };
+	if (pipe(pipefd) != 0)
 	{
+		WLog_ERR(TAG, "webview_impl_run: pipe() failed: %s", strerror(errno));
 		return false;
 	}
-	w.add_navigation_listener(fkt, &arg);
-	w.navigate(url);
-	w.run();
-	return arg.getCode(code);
+
+	pid_t pid = fork();
+	if (pid < 0)
+	{
+		WLog_ERR(TAG, "webview_impl_run: fork() failed: %s", strerror(errno));
+		close(pipefd[0]);
+		close(pipefd[1]);
+		return false;
+	}
+
+	if (pid == 0)
+	{
+		// Child: stdout -> pipe, then exec. _exit(127) on exec failure is
+		// the parent's signal that the helper binary itself is missing,
+		// distinct from the helper running and failing on its own.
+		close(pipefd[0]);
+		dup2(pipefd[1], STDOUT_FILENO);
+		close(pipefd[1]);
+		execlp(helper.c_str(), helper.c_str(), url.c_str(), title.c_str(),
+		      static_cast<char*>(nullptr));
+		_exit(127);
+	}
+
+	// Parent
+	close(pipefd[1]);
+
+	std::string output;
+	char buf[4096];
+	ssize_t n = 0;
+	while ((n = read(pipefd[0], buf, sizeof(buf))) > 0)
+		output.append(buf, static_cast<size_t>(n));
+	close(pipefd[0]);
+
+	int status = 0;
+	waitpid(pid, &status, 0);
+
+	if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
+	{
+		if (WIFEXITED(status) && WEXITSTATUS(status) == 127)
+			WLog_WARN(TAG, "webview_impl_run: could not run '%s' -- is coffee-rdp-auth installed?",
+			          helper.c_str());
+		else if (WIFSIGNALED(status))
+			WLog_WARN(TAG, "webview_impl_run: coffee-rdp-auth killed by signal %d",
+			          WTERMSIG(status));
+		else
+			WLog_WARN(TAG, "webview_impl_run: coffee-rdp-auth exited with status %d",
+			          WIFEXITED(status) ? WEXITSTATUS(status) : -1);
+		return false;
+	}
+
+	while (!output.empty() && (output.back() == '\n' || output.back() == '\r'))
+		output.pop_back();
+
+	if (output.empty())
+		return false;
+
+	code = output;
+	return true;
 }
