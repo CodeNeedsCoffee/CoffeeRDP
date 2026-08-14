@@ -18,6 +18,7 @@
 #include <vector>
 
 #include "coffee_profiles.hpp"
+#include "coffee_rdp_document.hpp"
 
 namespace
 {
@@ -151,6 +152,16 @@ struct EditDialog
 	GtkWidget* idleTime = nullptr;
 	GtkWidget* idleCombo = nullptr;
 	GtkWidget* rdpFile = nullptr;
+	GtkWidget* rdpFileStatus = nullptr;
+
+	/* Last .rdp path whose contents were pulled into the form. Guards the
+	 * "changed" handler on the path entry so an existing file is loaded
+	 * exactly once per path, instead of re-clobbering fields the user is
+	 * mid-way through editing on every keystroke. */
+	std::string loadedRdpPath;
+	/* Set while a load is repopulating widgets, so the widgets' own
+	 * "changed" signals don't recurse back into the loader. */
+	bool loading = false;
 };
 
 void refreshList(AppState* st);
@@ -161,6 +172,85 @@ std::string entryText(GtkWidget* row)
 {
 	const char* t = gtk_editable_get_text(GTK_EDITABLE(row));
 	return t ? t : "";
+}
+
+int qualityIndex(const std::string& quality)
+{
+	for (int i = 0; kQualityOptions[i]; i++)
+	{
+		if (quality == kQualityOptions[i])
+			return i;
+	}
+	return 0;
+}
+
+/** Pushes a profile's values into the dialog's widgets. Used both when the
+ *  dialog opens and when a linked .rdp file is loaded. */
+void populateFields(EditDialog* ed, const CoffeeProfile& p)
+{
+	ed->loading = true;
+	gtk_editable_set_text(GTK_EDITABLE(ed->host), p.host.c_str());
+	adw_spin_row_set_value(ADW_SPIN_ROW(ed->port), p.port);
+	gtk_editable_set_text(GTK_EDITABLE(ed->username), p.username.c_str());
+	gtk_editable_set_text(GTK_EDITABLE(ed->domain), p.domain.c_str());
+	adw_combo_row_set_selected(ADW_COMBO_ROW(ed->quality),
+	                           static_cast<guint>(qualityIndex(p.quality)));
+	adw_switch_row_set_active(ADW_SWITCH_ROW(ed->multimon), p.multimon);
+	adw_switch_row_set_active(ADW_SWITCH_ROW(ed->fullscreen), p.fullscreen);
+	adw_spin_row_set_value(ADW_SPIN_ROW(ed->idleTime), p.idleKeepAliveSeconds);
+	gtk_editable_set_text(GTK_EDITABLE(ed->idleCombo), p.idleKeepAliveCombo.c_str());
+	ed->loading = false;
+}
+
+void setRdpStatus(EditDialog* ed, const std::string& text)
+{
+	if (ed->rdpFileStatus)
+		gtk_label_set_text(GTK_LABEL(ed->rdpFileStatus), text.c_str());
+}
+
+/** When the .rdp path points at a readable file, pull its settings into the
+ *  form so the fields show what the file actually contains -- and so that
+ *  saving writes back the file's own values plus the user's edits, rather
+ *  than overwriting the file with whatever stale defaults the form held. */
+void onRdpPathChanged(GtkEditable*, gpointer data)
+{
+	auto* ed = static_cast<EditDialog*>(data);
+	if (ed->loading)
+		return;
+
+	const auto path = entryText(ed->rdpFile);
+	if (path == ed->loadedRdpPath)
+		return;
+
+	if (path.empty())
+	{
+		ed->loadedRdpPath.clear();
+		setRdpStatus(ed, "Settings above are used directly.");
+		return;
+	}
+
+	if (!g_file_test(path.c_str(), G_FILE_TEST_EXISTS))
+	{
+		/* Almost certainly a half-typed path; don't touch the fields, and
+		 * don't treat it as an error yet -- saving will create the file. */
+		ed->loadedRdpPath.clear();
+		setRdpStatus(ed, "File does not exist yet — it will be created on save.");
+		return;
+	}
+
+	CoffeeRdpDocument doc;
+	if (!doc.load(path))
+	{
+		ed->loadedRdpPath.clear();
+		setRdpStatus(ed, "Could not read this file.");
+		return;
+	}
+
+	CoffeeProfile loaded;
+	coffee_rdp_document_to_profile(doc, loaded);
+	populateFields(ed, loaded);
+	ed->loadedRdpPath = path;
+	setRdpStatus(ed, "Loaded from file. Saving writes changes back to it.");
 }
 
 void onEditSave(GtkButton*, gpointer data)
@@ -196,6 +286,33 @@ void onEditSave(GtkButton*, gpointer data)
 	p.rdpFile = entryText(ed->rdpFile);
 
 	std::string error;
+	if (!CoffeeProfileStore::validate(p, error))
+	{
+		showError(st, error);
+		return;
+	}
+
+	/* Linked to a .rdp file: write the connection settings back into it,
+	 * preserving every key CoffeeRDP doesn't model (see
+	 * coffee_rdp_document.hpp -- enablerdsaadauth in particular). Done
+	 * before touching the profile store so a failed write doesn't leave the
+	 * store claiming settings the file never received. */
+	if (!p.rdpFile.empty())
+	{
+		CoffeeRdpDocument doc;
+		if (!doc.load(p.rdpFile))
+		{
+			showError(st, "Could not read the .rdp file:\n" + p.rdpFile);
+			return;
+		}
+		coffee_rdp_document_from_profile(p, doc);
+		if (!doc.save(p.rdpFile))
+		{
+			showError(st, "Could not write the .rdp file:\n" + p.rdpFile);
+			return;
+		}
+	}
+
 	const bool ok = ed->originalName.empty() ? st->store.add(p, error)
 	                                         : st->store.update(ed->originalName, p, error);
 	if (!ok)
@@ -206,6 +323,8 @@ void onEditSave(GtkButton*, gpointer data)
 
 	persist(st);
 	refreshList(st);
+	if (!p.rdpFile.empty())
+		showToast(st, "Saved, and updated " + p.rdpFile);
 	adw_dialog_close(ed->dialog);
 }
 
@@ -320,12 +439,34 @@ void presentEditDialog(AppState* st, const CoffeeProfile* existing)
 	adw_preferences_page_add(ADW_PREFERENCES_PAGE(page), ADW_PREFERENCES_GROUP(idleGroup));
 
 	auto* advGroup = adw_preferences_group_new();
-	adw_preferences_group_set_title(ADW_PREFERENCES_GROUP(advGroup), "Advanced");
+	adw_preferences_group_set_title(ADW_PREFERENCES_GROUP(advGroup), "Linked .rdp file");
 	adw_preferences_group_set_description(
 	    ADW_PREFERENCES_GROUP(advGroup),
-	    "When set, the .rdp file supplies the connection settings above.");
-	ed->rdpFile = addEntryRow(advGroup, ".rdp file", seed.rdpFile);
+	    "When set, the settings above are read from this file, and saving writes them "
+	    "back to it. Keys CoffeeRDP doesn't manage are left untouched.");
+	ed->rdpFile = addEntryRow(advGroup, "File path", seed.rdpFile);
+
+	ed->rdpFileStatus = gtk_label_new("");
+	gtk_label_set_wrap(GTK_LABEL(ed->rdpFileStatus), TRUE);
+	gtk_label_set_xalign(GTK_LABEL(ed->rdpFileStatus), 0.0f);
+	gtk_widget_add_css_class(ed->rdpFileStatus, "dim-label");
+	gtk_widget_add_css_class(ed->rdpFileStatus, "caption");
+	gtk_widget_set_margin_top(ed->rdpFileStatus, 6);
+	adw_preferences_group_add(ADW_PREFERENCES_GROUP(advGroup), ed->rdpFileStatus);
+
 	adw_preferences_page_add(ADW_PREFERENCES_PAGE(page), ADW_PREFERENCES_GROUP(advGroup));
+
+	/* Connected after every widget exists, so the handler can safely
+	 * repopulate the whole form. */
+	g_signal_connect(ed->rdpFile, "changed", G_CALLBACK(onRdpPathChanged), ed);
+
+	/* Opening an already-linked profile: show what the file currently
+	 * contains rather than the possibly-stale copy in profiles.ini, so the
+	 * file stays the source of truth for a linked profile. */
+	if (!seed.rdpFile.empty())
+		onRdpPathChanged(GTK_EDITABLE(ed->rdpFile), ed);
+	else
+		setRdpStatus(ed, "Settings above are used directly.");
 
 	adw_toolbar_view_set_content(ADW_TOOLBAR_VIEW(toolbar), page);
 	adw_dialog_set_child(dialog, toolbar);
