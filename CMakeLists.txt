@@ -9,3 +9,4 @@ enable_testing()
 
 add_subdirectory(src/session)
 add_subdirectory(src/auth)
+add_subdirectory(src/manager)
