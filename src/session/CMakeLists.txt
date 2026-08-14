@@ -67,7 +67,7 @@ set(SDL_CLIENT_BINARY_NAME "${MODULE_NAME}")
 set(FREERDP_VERSION_FULL "0.1.0")
 set(GIT_REVISION "coffeerdp")
 set(VENDOR "CoffeeRDP")
-set(SDL_CLIENT_UUID "com.coffeerdp.session")
+set(SDL_CLIENT_UUID "com.codeneedscoffee.coffeerdp.session")
 set(PROJECT_URL "")
 configure_file(${CMAKE_CURRENT_SOURCE_DIR}/sdl_config.hpp.in ${CMAKE_CURRENT_BINARY_DIR}/sdl_config.hpp @ONLY)
 

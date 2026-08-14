@@ -230,7 +230,7 @@ int main(int argc, char** argv)
 	LaunchArgs launch{ argv[1], argc == 3 ? argv[2] : nullptr };
 
 	GtkApplication* app =
-	    gtk_application_new("com.coffeerdp.auth", G_APPLICATION_DEFAULT_FLAGS);
+	    gtk_application_new("com.codeneedscoffee.coffeerdp.auth", G_APPLICATION_DEFAULT_FLAGS);
 	g_signal_connect(app, "activate", G_CALLBACK(onActivate), &launch);
 	g_application_run(G_APPLICATION(app), 0, nullptr);
 	g_object_unref(app);

@@ -27,3 +27,17 @@ target_link_libraries(${MODULE_NAME} PRIVATE coffee-profiles coffee-rdp-document
                                             PkgConfig::ADWAITA)
 
 install(TARGETS ${MODULE_NAME} DESTINATION ${CMAKE_INSTALL_PREFIX}/bin)
+
+# Desktop entry + icon (PLAN.md Phase 7.4). Icon= in the .desktop file names
+# the icon by its hicolor theme id ("com.codeneedscoffee.coffeerdp.manager"),
+# not a path -- every size below installs under that same name so the
+# desktop shell's own theme lookup finds it, the standard XDG mechanism
+# rather than anything CoffeeRDP-specific.
+install(FILES data/com.codeneedscoffee.coffeerdp.manager.desktop
+       DESTINATION ${CMAKE_INSTALL_PREFIX}/share/applications)
+
+set(COFFEERDP_ICON_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../resources/icon)
+foreach(_size 16 24 32 48 64 128 256)
+   install(FILES ${COFFEERDP_ICON_SOURCE_DIR}/hicolor/${_size}x${_size}/apps/com.codeneedscoffee.coffeerdp.manager.png
+          DESTINATION ${CMAKE_INSTALL_PREFIX}/share/icons/hicolor/${_size}x${_size}/apps)
+endforeach()

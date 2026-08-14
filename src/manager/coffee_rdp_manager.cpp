@@ -14,6 +14,7 @@
 #include <adwaita.h>
 #include <gtk/gtk.h>
 
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -28,6 +29,13 @@ namespace
  * the sibling binary in the same build tree as this one (see
  * sessionBinaryPath()) rather than failing with "command not found". */
 constexpr const char* kSessionBinaryName = "coffee-rdp-session";
+
+/* Also the hicolor icon theme name the logo installs under (see
+ * src/manager/CMakeLists.txt and
+ * data/com.codeneedscoffee.coffeerdp.manager.desktop's Icon= line) --
+ * GNOME/Wayland convention is that these match, so a single constant keeps
+ * them from drifting apart. */
+constexpr const char* kApplicationId = "com.codeneedscoffee.coffeerdp.manager";
 
 struct AppState
 {
@@ -93,6 +101,35 @@ std::string sessionBinaryPath()
 	}
 
 	return "";
+}
+
+/** Registers the source tree's resources/icon/ (which mirrors a real
+ *  hicolor icon theme's layout -- hicolor/<size>x<size>/apps/) as an extra
+ *  icon-theme search path, so a development build run straight out of
+ *  build/ can still show the app's own logo without needing `ninja
+ *  install` first. Installed builds don't need this at all: `ninja install`
+ *  (see src/manager/CMakeLists.txt) puts the same PNGs under
+ *  $prefix/share/icons/hicolor/, which GtkIconTheme already searches by
+ *  default -- this is purely a development convenience, same reasoning as
+ *  sessionBinaryPath()'s build-tree fallback above. */
+void registerDevIconThemePath(GtkWidget* forWidget)
+{
+	char* self = g_file_read_link("/proc/self/exe", nullptr);
+	if (!self)
+		return;
+
+	/* .../build/src/manager/coffeerdp -> .../resources/icon */
+	gchar* dir = g_path_get_dirname(self);
+	gchar* candidate = g_build_filename(dir, "..", "..", "..", "resources", "icon", nullptr);
+	g_free(dir);
+	g_free(self);
+
+	if (g_file_test(candidate, G_FILE_TEST_IS_DIR))
+	{
+		auto* theme = gtk_icon_theme_get_for_display(gtk_widget_get_display(forWidget));
+		gtk_icon_theme_add_search_path(theme, candidate);
+	}
+	g_free(candidate);
 }
 
 void connectToProfile(AppState* st, const CoffeeProfile& profile)
@@ -165,6 +202,7 @@ struct EditDialog
 };
 
 void refreshList(AppState* st);
+void onExportClicked(GtkButton*, gpointer data);
 
 const char* kQualityOptions[] = { "", "speed", "balanced", "quality", "best", "auto", nullptr };
 
@@ -360,7 +398,13 @@ GtkWidget* addSwitchRow(GtkWidget* group, const char* title, const char* subtitl
 	return row;
 }
 
-void presentEditDialog(AppState* st, const CoffeeProfile* existing)
+/** `existing`: editing a profile already in the store (originalName is set,
+ *  Save calls update()). `importSeed`: prefills the form from a just-loaded
+ *  .rdp file's contents (e.g. name from its filename) without linking to it
+ *  or committing anything -- Save still calls add(), same as a blank "New
+ *  Profile". Passing both is not meaningful; callers pass at most one. */
+void presentEditDialog(AppState* st, const CoffeeProfile* existing,
+                       const CoffeeProfile* importSeed = nullptr)
 {
 	auto* ed = g_new0(EditDialog, 1);
 	new (ed) EditDialog();
@@ -370,10 +414,12 @@ void presentEditDialog(AppState* st, const CoffeeProfile* existing)
 	CoffeeProfile seed;
 	if (existing)
 		seed = *existing;
+	else if (importSeed)
+		seed = *importSeed;
 
 	auto* dialog = adw_dialog_new();
 	ed->dialog = dialog;
-	adw_dialog_set_title(dialog, existing ? "Edit Profile" : "New Profile");
+	adw_dialog_set_title(dialog, existing ? "Edit Profile" : (importSeed ? "Import Profile" : "New Profile"));
 	adw_dialog_set_content_width(dialog, 480);
 	adw_dialog_set_content_height(dialog, 640);
 
@@ -606,6 +652,14 @@ void refreshList(AppState* st)
 		                      newRowContext(st, p.name), freeRowContext, G_CONNECT_DEFAULT);
 		adw_action_row_add_suffix(ADW_ACTION_ROW(row), connect);
 
+		GtkWidget* exportBtn = gtk_button_new_from_icon_name("document-save-as-symbolic");
+		gtk_widget_set_valign(exportBtn, GTK_ALIGN_CENTER);
+		gtk_widget_set_tooltip_text(exportBtn, "Export to .rdp…");
+		gtk_widget_add_css_class(exportBtn, "flat");
+		g_signal_connect_data(exportBtn, "clicked", G_CALLBACK(onExportClicked),
+		                      newRowContext(st, p.name), freeRowContext, G_CONNECT_DEFAULT);
+		adw_action_row_add_suffix(ADW_ACTION_ROW(row), exportBtn);
+
 		GtkWidget* edit = gtk_button_new_from_icon_name("document-edit-symbolic");
 		gtk_widget_set_valign(edit, GTK_ALIGN_CENTER);
 		gtk_widget_set_tooltip_text(edit, "Edit");
@@ -631,6 +685,247 @@ void onAddClicked(GtkButton*, gpointer data)
 	presentEditDialog(static_cast<AppState*>(data), nullptr);
 }
 
+/* ------------------------------------------------------- import / export */
+
+std::string baseNameWithoutExt(const std::string& path)
+{
+	gchar* base = g_path_get_basename(path.c_str());
+	std::string name = base ? base : path;
+	g_free(base);
+
+	const auto dot = name.find_last_of('.');
+	if (dot != std::string::npos && dot > 0)
+		name = name.substr(0, dot);
+	return name;
+}
+
+/** Appends " (2)", " (3)", ... until the name is free, so importing two
+ *  files that both happen to be named e.g. "work.rdp" doesn't fail with a
+ *  duplicate-name error the user never asked to resolve. */
+std::string suggestProfileName(AppState* st, const std::string& base)
+{
+	if (!st->store.find(base))
+		return base;
+	for (int i = 2; i < 1000; i++)
+	{
+		auto candidate = base + " (" + std::to_string(i) + ")";
+		if (!st->store.find(candidate))
+			return candidate;
+	}
+	return base; // pathological; validate()/add() will still catch the collision
+}
+
+GtkFileDialog* newRdpFileDialog(const char* title)
+{
+	auto* dialog = gtk_file_dialog_new();
+	gtk_file_dialog_set_title(dialog, title);
+
+	auto* filter = gtk_file_filter_new();
+	gtk_file_filter_set_name(filter, "RDP Files");
+	gtk_file_filter_add_suffix(filter, "rdp");
+	auto* filters = g_list_store_new(GTK_TYPE_FILE_FILTER);
+	g_list_store_append(filters, filter);
+	gtk_file_dialog_set_filters(dialog, G_LIST_MODEL(filters));
+	g_object_unref(filters);
+	g_object_unref(filter);
+
+	return dialog;
+}
+
+bool userDismissedDialog(GError* error)
+{
+	return error && g_error_matches(error, GTK_DIALOG_ERROR, GTK_DIALOG_ERROR_DISMISSED);
+}
+
+/** Import, whether from the toolbar button or a drop: loads a .rdp and
+ *  returns a standalone (unlinked -- rdpFile left empty) profile seeded from
+ *  it, with a name derived from the filename and de-duplicated against the
+ *  store. Doesn't touch the store itself; callers decide whether to present
+ *  it for review or commit it directly. */
+bool loadRdpAsProfile(AppState* st, const std::string& path, CoffeeProfile& out,
+                      std::string& error)
+{
+	CoffeeRdpDocument doc;
+	if (!doc.load(path))
+	{
+		error = "Could not read:\n" + path;
+		return false;
+	}
+	coffee_rdp_document_to_profile(doc, out);
+	out.name = suggestProfileName(st, baseNameWithoutExt(path));
+	return true;
+}
+
+void onImportFileChosen(GObject* source, GAsyncResult* res, gpointer data)
+{
+	auto* st = static_cast<AppState*>(data);
+	GError* error = nullptr;
+	GFile* file = gtk_file_dialog_open_finish(GTK_FILE_DIALOG(source), res, &error);
+	if (!file)
+	{
+		if (!userDismissedDialog(error))
+			showError(st, std::string("Could not open file:\n") +
+			                  (error && error->message ? error->message : "unknown error"));
+		if (error)
+			g_error_free(error);
+		return;
+	}
+
+	gchar* pathC = g_file_get_path(file);
+	const std::string path = pathC ? pathC : "";
+	g_free(pathC);
+	g_object_unref(file);
+
+	CoffeeProfile seed;
+	std::string loadError;
+	if (!loadRdpAsProfile(st, path, seed, loadError))
+	{
+		showError(st, loadError);
+		return;
+	}
+
+	/* Review, not a direct add: an explicit "Import…" click is a deliberate
+	 * single-file action, so it gets the same review-before-commit treatment
+	 * as "New Profile" -- the user can rename it or tweak a field before
+	 * anything is written. Contrast with the drag-and-drop path below, which
+	 * is meant for quick bulk import and commits directly. */
+	presentEditDialog(st, nullptr, &seed);
+}
+
+void onImportClicked(GtkButton*, gpointer data)
+{
+	auto* st = static_cast<AppState*>(data);
+	auto* dialog = newRdpFileDialog("Import .rdp File");
+	gtk_file_dialog_open(dialog, GTK_WINDOW(st->window), nullptr, onImportFileChosen, st);
+	g_object_unref(dialog);
+}
+
+struct ExportContext
+{
+	AppState* st = nullptr;
+	std::string profileName;
+};
+
+void onExportFileChosen(GObject* source, GAsyncResult* res, gpointer data)
+{
+	std::unique_ptr<ExportContext> ctx(static_cast<ExportContext*>(data));
+	GError* error = nullptr;
+	GFile* file = gtk_file_dialog_save_finish(GTK_FILE_DIALOG(source), res, &error);
+	if (!file)
+	{
+		if (!userDismissedDialog(error))
+			showError(ctx->st, std::string("Could not export:\n") +
+			                        (error && error->message ? error->message : "unknown error"));
+		if (error)
+			g_error_free(error);
+		return;
+	}
+
+	gchar* pathC = g_file_get_path(file);
+	const std::string path = pathC ? pathC : "";
+	g_free(pathC);
+	g_object_unref(file);
+
+	const auto* p = ctx->st->store.find(ctx->profileName);
+	if (!p)
+	{
+		showError(ctx->st, "\"" + ctx->profileName + "\" no longer exists.");
+		return;
+	}
+
+	/* Load first (a no-op empty document if the path doesn't exist yet, see
+	 * coffee_rdp_document.hpp) so exporting onto an existing file merges
+	 * into it -- preserving whatever that file already has, exactly like
+	 * editing a linked profile does -- rather than overwriting it outright. */
+	CoffeeRdpDocument doc;
+	if (!doc.load(path))
+	{
+		showError(ctx->st, "Could not read:\n" + path);
+		return;
+	}
+	coffee_rdp_document_from_profile(*p, doc);
+	if (!doc.save(path))
+	{
+		showError(ctx->st, "Could not write:\n" + path);
+		return;
+	}
+
+	showToast(ctx->st, "Exported \"" + ctx->profileName + "\" to " + path);
+}
+
+void onExportClicked(GtkButton*, gpointer data)
+{
+	auto* rowCtx = static_cast<RowContext*>(data);
+	auto* exportCtx = new ExportContext{ rowCtx->st, rowCtx->name };
+
+	auto* dialog = newRdpFileDialog("Export Profile");
+	gtk_file_dialog_set_initial_name(dialog, (rowCtx->name + ".rdp").c_str());
+	gtk_file_dialog_save(dialog, GTK_WINDOW(rowCtx->st->window), nullptr, onExportFileChosen,
+	                     exportCtx);
+	g_object_unref(dialog);
+}
+
+/** Drag-and-drop onto the main window: each dropped .rdp is imported
+ *  directly and saved, no review dialog -- deliberately different from the
+ *  toolbar Import button. A drop is inherently a multi-file gesture (a
+ *  file manager selection), and prompting once per file would be tedious;
+ *  a mis-imported profile is one click to fix via Edit or Delete. */
+gboolean onWindowDrop(GtkDropTarget*, const GValue* value, double, double, gpointer data)
+{
+	auto* st = static_cast<AppState*>(data);
+	if (!G_VALUE_HOLDS(value, GDK_TYPE_FILE_LIST))
+		return FALSE;
+
+	auto* files = static_cast<GSList*>(g_value_get_boxed(value));
+	int imported = 0;
+	int skipped = 0;
+
+	for (GSList* it = files; it != nullptr; it = it->next)
+	{
+		auto* file = G_FILE(it->data);
+		gchar* pathC = g_file_get_path(file);
+		if (!pathC)
+		{
+			skipped++;
+			continue;
+		}
+		const std::string path = pathC;
+		g_free(pathC);
+
+		if (!g_str_has_suffix(path.c_str(), ".rdp"))
+		{
+			skipped++;
+			continue;
+		}
+
+		CoffeeProfile p;
+		std::string error;
+		if (!loadRdpAsProfile(st, path, p, error) || !st->store.add(p, error))
+		{
+			skipped++;
+			continue;
+		}
+		imported++;
+	}
+
+	if (imported > 0)
+	{
+		persist(st);
+		refreshList(st);
+	}
+
+	std::string msg;
+	if (imported > 0)
+		msg = "Imported " + std::to_string(imported) + " profile" + (imported == 1 ? "" : "s");
+	if (skipped > 0)
+		msg += (msg.empty() ? "" : ", ") + std::string("skipped ") + std::to_string(skipped) +
+		       " file" + (skipped == 1 ? "" : "s");
+	if (!msg.empty())
+		showToast(st, msg);
+
+	return imported > 0;
+}
+
 void onActivate(GtkApplication* app, gpointer data)
 {
 	auto* st = static_cast<AppState*>(data);
@@ -640,6 +935,26 @@ void onActivate(GtkApplication* app, gpointer data)
 	gtk_window_set_title(GTK_WINDOW(window), "CoffeeRDP");
 	gtk_window_set_default_size(GTK_WINDOW(window), 640, 520);
 
+	registerDevIconThemePath(GTK_WIDGET(window));
+	/* Icon *lookup* on Wayland is themed by name, resolved against
+	 * kApplicationId regardless of whether this is an installed build
+	 * (found under $prefix/share/icons/hicolor) or a dev build (found via
+	 * registerDevIconThemePath() above) -- unlike GTK3/X11, GTK4 has no API
+	 * to hand a window an arbitrary raw image as its taskbar/switcher icon
+	 * directly, that's controlled by the compositor via the app's
+	 * application-id + a matching .desktop Icon= key instead. This call
+	 * still matters even so: it's what makes in-process lookups (the empty
+	 * state below) resolve by the same name. */
+	gtk_window_set_icon_name(GTK_WINDOW(window), kApplicationId);
+
+	/* Drag a .rdp file (or several) in from a file manager to import it --
+	 * see onWindowDrop() for why this commits directly rather than opening
+	 * the review dialog the toolbar Import button uses. Attached to the
+	 * whole window so it works over the empty state too, not just the list. */
+	auto* dropTarget = gtk_drop_target_new(GDK_TYPE_FILE_LIST, GDK_ACTION_COPY);
+	g_signal_connect(dropTarget, "drop", G_CALLBACK(onWindowDrop), st);
+	gtk_widget_add_controller(GTK_WIDGET(window), GTK_EVENT_CONTROLLER(dropTarget));
+
 	auto* toolbar = adw_toolbar_view_new();
 	auto* header = adw_header_bar_new();
 
@@ -648,14 +963,40 @@ void onActivate(GtkApplication* app, gpointer data)
 	g_signal_connect(add, "clicked", G_CALLBACK(onAddClicked), st);
 	adw_header_bar_pack_start(ADW_HEADER_BAR(header), add);
 
+	auto* import = gtk_button_new_from_icon_name("document-open-symbolic");
+	gtk_widget_set_tooltip_text(import, "Import .rdp file…");
+	g_signal_connect(import, "clicked", G_CALLBACK(onImportClicked), st);
+	adw_header_bar_pack_start(ADW_HEADER_BAR(header), import);
+
 	adw_toolbar_view_add_top_bar(ADW_TOOLBAR_VIEW(toolbar), header);
 
 	auto* stack = adw_view_stack_new();
 	st->stack = ADW_VIEW_STACK(stack);
 
-	/* Empty state */
+	/* Empty state. Uses the app's own full-color logo via a real icon-theme
+	 * lookup (kApplicationId, same name gtk_window_set_icon_name() used
+	 * above) rather than adw_status_page_set_icon_name(): that call expects
+	 * a *symbolic* (single-color, theme-recolored) icon per libadwaita's
+	 * design guidelines, and our logo is deliberately full-color -- forcing
+	 * it through the symbolic slot would either fail to render or get
+	 * flattened to a silhouette. set_paintable() is libadwaita's own
+	 * supported way to show a full-color hero graphic here instead. Falls
+	 * back to a stock icon if the lookup ever fails (e.g. a packaging bug
+	 * left the icon out) rather than showing nothing. */
 	auto* status = adw_status_page_new();
-	adw_status_page_set_icon_name(ADW_STATUS_PAGE(status), "network-server-symbolic");
+	auto* iconTheme = gtk_icon_theme_get_for_display(gtk_widget_get_display(GTK_WIDGET(window)));
+	if (gtk_icon_theme_has_icon(iconTheme, kApplicationId))
+	{
+		auto* iconPaintable =
+		    gtk_icon_theme_lookup_icon(iconTheme, kApplicationId, nullptr, 128,
+		                              gtk_widget_get_scale_factor(GTK_WIDGET(window)),
+		                              gtk_widget_get_direction(GTK_WIDGET(window)),
+		                              GTK_ICON_LOOKUP_FORCE_REGULAR);
+		adw_status_page_set_paintable(ADW_STATUS_PAGE(status), GDK_PAINTABLE(iconPaintable));
+		g_object_unref(iconPaintable);
+	}
+	else
+		adw_status_page_set_icon_name(ADW_STATUS_PAGE(status), "network-server-symbolic");
 	adw_status_page_set_title(ADW_STATUS_PAGE(status), "No Connections");
 	adw_status_page_set_description(ADW_STATUS_PAGE(status),
 	                                "Add a connection profile to get started.");
@@ -712,7 +1053,7 @@ int main(int argc, char** argv)
 		g_printerr("Warning: could not read %s -- starting with an empty profile list\n",
 		           st.storePath.c_str());
 
-	auto* app = adw_application_new("com.coffeerdp.manager", G_APPLICATION_DEFAULT_FLAGS);
+	auto* app = adw_application_new(kApplicationId, G_APPLICATION_DEFAULT_FLAGS);
 	g_signal_connect(app, "activate", G_CALLBACK(onActivate), &st);
 
 	const int status = g_application_run(G_APPLICATION(app), argc, argv);
