@@ -18,11 +18,11 @@ Goals:
 
 ## Status
 
-Under active development, see `PLAN.md` for full details and open issues.
-Working today: the session client, quality presets, idle keep-alive, an
-in-session control bar, persistent AAD login, and a GTK4 connection manager
-that saves profiles and can import, export, and edit `.rdp` files in place.
-A full connect launched from the GUI has not yet been verified.
+Under active development. Working today: the session client, quality
+presets, idle keep-alive, an in-session control bar, persistent AAD login,
+and a GTK4 connection manager that saves profiles and can import, export,
+and edit `.rdp` files in place. A full connect launched from the GUI has
+not yet been verified.
 
 ## Building
 
