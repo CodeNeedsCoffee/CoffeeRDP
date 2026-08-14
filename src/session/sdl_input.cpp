@@ -632,6 +632,16 @@ bool sdlInput::handleEvent(const SDL_KeyboardEvent& ev)
 		           ev.scancode, scancode, sc, ex ? " extended" : "");
 	}
 #endif
+	if (!_sdl->grabKeyboard())
+	{
+		/* Capture Keyboard is off (floatbar button or the grab hotkey
+		 * above): don't forward ordinary keystrokes to the remote session
+		 * at all. The hotkey block above this point still runs regardless,
+		 * so there's always a way back on (or to the floatbar, via mouse)
+		 * without the keyboard being live on the session. */
+		return true;
+	}
+
 	return freerdp_input_send_keyboard_event_ex(_sdl->context()->input,
 	                                            ev.type == SDL_EVENT_KEY_DOWN, ev.repeat, scancode);
 }

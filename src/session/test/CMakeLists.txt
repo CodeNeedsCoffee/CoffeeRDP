@@ -7,3 +7,8 @@ add_executable(test-coffee-idle test_coffee_idle.cpp)
 target_link_libraries(test-coffee-idle PRIVATE coffee-idle)
 
 add_test(NAME coffee-idle COMMAND test-coffee-idle)
+
+add_executable(test-coffee-floatbar test_coffee_floatbar.cpp)
+target_link_libraries(test-coffee-floatbar PRIVATE coffee-floatbar)
+
+add_test(NAME coffee-floatbar COMMAND test-coffee-floatbar)

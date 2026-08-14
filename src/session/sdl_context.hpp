@@ -41,6 +41,7 @@
 #include "coffee_idle.hpp"
 
 #include "dialogs/sdl_connection_dialog_wrapper.hpp"
+#include "dialogs/sdl_floatbar.hpp"
 
 class SdlContext
 {
@@ -171,7 +172,42 @@ class SdlContext
 	 *  firing periodically through sustained idleness. */
 	void checkIdleKeepAlive();
 
+	/** Wires the floatbar's button actions to real session behavior, then
+	 *  blocks until it is actually attached to a window. Called once from
+	 *  postConnect(), which -- like the rest of the connect callbacks --
+	 *  runs on the RDP background thread (see start()/rdpThreadRun()), not
+	 *  the main SDL thread. Attaching touches SDL_Renderer/TTF font
+	 *  resources, which on an OpenGL-backed renderer must only happen on the
+	 *  thread that owns the GL context; doing that directly here crashed
+	 *  ("Unable to make EGL context current") the first time this was wired
+	 *  up. Mirrors waitForWindowsCreated()'s exact pattern: post a user
+	 *  event, block on a WinPREvent the main thread sets once done. */
+	[[nodiscard]] bool configureFloatbar();
+
+	/** Attaches the floatbar to the first session window. Must run on the
+	 *  main SDL thread -- see SDL_EVENT_USER_CONFIGURE_FLOATBAR in
+	 *  sdl_freerdp.cpp's sdl_run(), configureFloatbar()'s only caller. */
+	[[nodiscard]] bool attachFloatbar();
+
   private:
+	/** Draws the floatbar overlay onto `renderer` if `window` is the one it
+	 *  is currently attached to (see SDL_EVENT_WINDOW_MOUSE_ENTER handling in
+	 *  handleEvent()) -- passed as SdlWindow::updateSurface()'s overlay
+	 *  callback so the bar is redrawn on top of every RDP frame update for
+	 *  free, without baking it into the persistent RDP render target. */
+	void drawFloatbarOverlay(const SdlWindow& window, SDL_Renderer* renderer);
+
+	/** Re-presents the currently-attached floatbar window with no new RDP
+	 *  content, just to animate the bar -- called after a mouse-motion tick
+	 *  changes its slide offset, since RDP dirty-rect updates alone would
+	 *  leave the animation stalled on an otherwise-static remote desktop. */
+	void redrawFloatbarOnly();
+
+	/** Floatbar's Keep-alive button: turns the idle keep-alive on/off without
+	 *  losing the interval/combo it was originally configured with, so
+	 *  re-enabling restores the real setting rather than defaulting. */
+	void toggleIdleKeepAlive();
+
 	[[nodiscard]] bool resizeToScale(SdlWindow* window);
 	[[nodiscard]] bool useLocalScale() const;
 
@@ -231,7 +267,13 @@ class SdlContext
 	bool _fullscreen = false;
 	bool _resizeable = false;
 	bool _grabMouse = false;
-	bool _grabKeyboard = false;
+	/* Defaults on: this now also gates whether ordinary keystrokes forward
+	 * to the remote session at all (see sdlInput::handleEvent()), not just
+	 * OS-level shortcut capture -- has to start true or typing wouldn't
+	 * work out of the box. attachFloatbar() engages the matching real
+	 * SDL_SetWindowKeyboardGrab() at connect so the floatbar's "Capture
+	 * Kbd: On" default reflects what's actually active, not just the flag. */
+	bool _grabKeyboard = true;
 	int _exitCode = -1;
 	std::atomic<bool> _rdpThreadRunning = false;
 	SDL_PixelFormat _sdlPixelFormat = SDL_PIXELFORMAT_UNKNOWN;
@@ -263,4 +305,10 @@ class SdlContext
 
 	CoffeeIdleTimer _idleTimer;
 	std::vector<UINT32> _idleComboRdpScancodes;
+	unsigned _idleConfiguredInterval = 0;
+	std::string _idleConfiguredCombo;
+
+	SdlFloatbar _floatbar;
+	SDL_WindowID _floatbarWindowId = 0;
+	WinPREvent _floatbarConfiguredEvent;
 };

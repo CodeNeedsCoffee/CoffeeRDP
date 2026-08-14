@@ -29,9 +29,11 @@ set(SRCS
     sdl_connection_dialog_hider.cpp
     sdl_blend_mode_guard.cpp
     sdl_blend_mode_guard.hpp
+    sdl_floatbar.cpp
+    sdl_floatbar.hpp
 )
 
 add_subdirectory(res)
 
 add_library(sdl3-dialogs STATIC ${SRCS})
-target_link_libraries(sdl3-dialogs PUBLIC sdl3_client_res winpr freerdp SDL3::SDL3 SDL3_ttf::SDL3_ttf)
+target_link_libraries(sdl3-dialogs PUBLIC sdl3_client_res winpr freerdp SDL3::SDL3 SDL3_ttf::SDL3_ttf coffee-floatbar)

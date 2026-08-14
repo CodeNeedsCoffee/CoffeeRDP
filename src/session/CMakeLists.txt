@@ -7,6 +7,12 @@ find_package(FreeRDP 3 REQUIRED)
 find_package(FreeRDP-Client 3 REQUIRED)
 find_package(WinPR 3 REQUIRED)
 
+# Floatbar slide/reveal/pin state machine. No SDL/FreeRDP dependency at all
+# -- the actual rendering lives in dialogs/sdl_floatbar.cpp, which links this.
+# Defined before add_subdirectory(dialogs) below: dialogs/CMakeLists.txt
+# links it, and CMake needs the target to already exist at that point.
+add_library(coffee-floatbar STATIC coffee_floatbar.cpp coffee_floatbar.hpp)
+
 # common must come before dialogs: dialogs/res links sdl-common-client-res,
 # defined in common/res. Matches upstream client/SDL/CMakeLists.txt ordering.
 add_subdirectory(common)
@@ -79,6 +85,7 @@ target_link_libraries(${MODULE_NAME} PRIVATE
     sdl-common-prefs
     coffee-quality
     coffee-idle
+    coffee-floatbar
     SDL3::SDL3
 )
 

@@ -263,6 +263,10 @@ bool SdlWidget::set_wrap(bool wrap, size_t width)
 {
 	_wrap = wrap;
 	_text_width = width;
+	/* Changes how the same text string would be laid out, so a cached
+	 * render from before this call is no longer valid -- see update_text(). */
+	_renderedTexture.reset();
+	_renderedText.clear();
 	return _wrap;
 }
 
@@ -301,6 +305,23 @@ bool SdlWidget::update_text(const std::string& text)
 	if (_text.empty())
 		return true;
 
+	/* Text-image widgets aside (their "texture" is a caller-owned SDL_IOStream
+	 * image, already cheap to reuse via _image), reuse the last rendered
+	 * texture whenever the text hasn't actually changed, instead of
+	 * re-rasterizing via TTF and re-uploading to the GPU every single call.
+	 * Ordinary dialogs redraw rarely enough that this never mattered, but
+	 * the floatbar (dialogs/sdl_floatbar.hpp) redraws on every mouse-motion
+	 * event while hovering it -- without this, moving the pointer across
+	 * its buttons re-rendered all of their text from scratch on every
+	 * event, and the SDL event queue fell further and further behind
+	 * because each redraw couldn't keep up with real motion-event rates. */
+	if (!_image && _renderedTexture && (text == _renderedText))
+	{
+		const auto rc =
+		    SDL_RenderTexture(_renderer.get(), _renderedTexture.get(), &_renderedSrc, &_renderedDst);
+		return !widget_log_error(rc, "SDL_RenderCopy");
+	}
+
 	SDL_FRect src{};
 	SDL_FRect dst{};
 
@@ -326,6 +347,14 @@ bool SdlWidget::update_text(const std::string& text)
 		texture = render_text(_text, _fontcolor, src, dst);
 	if (!texture)
 		return false;
+
+	if (!_image)
+	{
+		_renderedText = _text;
+		_renderedTexture = texture;
+		_renderedSrc = src;
+		_renderedDst = dst;
+	}
 
 	const auto rc = SDL_RenderTexture(_renderer.get(), texture.get(), &src, &dst);
 	return !widget_log_error(rc, "SDL_RenderCopy");

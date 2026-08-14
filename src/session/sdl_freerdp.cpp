@@ -258,6 +258,17 @@ static void sdl_term_handler([[maybe_unused]] int signum, [[maybe_unused]] const
 							throw ErrorMsg{ -1, windowEvent.type, "sdl->createWindows" };
 					}
 					break;
+					case SDL_EVENT_USER_CONFIGURE_FLOATBAR:
+					{
+						/* Hands the floatbar's SDL_Renderer/TTF attach step
+						 * back to the main thread -- see configureFloatbar()
+						 * in sdl_context.cpp for why it can't happen on the
+						 * RDP connect thread that queues this event. */
+						auto ctx = static_cast<SdlContext*>(windowEvent.user.data1);
+						if (!ctx->attachFloatbar())
+							throw ErrorMsg{ -1, windowEvent.type, "sdl->attachFloatbar" };
+					}
+					break;
 					case SDL_EVENT_USER_WINDOW_RESIZEABLE:
 					{
 						auto window = static_cast<SdlWindow*>(windowEvent.user.data1);

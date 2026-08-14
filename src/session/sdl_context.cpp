@@ -18,8 +18,11 @@
  */
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <tuple>
+
+#include <freerdp/scancode.h>
 
 #include "sdl_context.hpp"
 #include "sdl_config.hpp"
@@ -331,6 +334,10 @@ BOOL SdlContext::postConnect(freerdp* instance)
 	                        true))
 		return FALSE;
 	sdl->setConnected(true);
+	/* Best-effort: a floatbar that fails to attach is a cosmetic loss, not a
+	 * reason to fail an otherwise-working session (same reasoning as Phase
+	 * 2/3's invalid-preset/invalid-combo handling). */
+	std::ignore = sdl->configureFloatbar();
 	return TRUE;
 }
 
@@ -953,7 +960,8 @@ bool SdlContext::drawToWindow(SdlWindow& window, const std::vector<SDL_Rect>& re
 			return false;
 	}
 
-	window.updateSurface();
+	window.updateSurface(
+	    [this, &window](SDL_Renderer* renderer) { drawFloatbarOverlay(window, renderer); });
 	return true;
 }
 
@@ -1136,7 +1144,28 @@ bool SdlContext::handleEvent(const SDL_WindowEvent& ev)
 	switch (ev.type)
 	{
 		case SDL_EVENT_WINDOW_MOUSE_ENTER:
+			/* The floatbar follows the pointer's window (PLAN.md Phase 6
+			 * step 6.5): re-attach it here rather than only once at connect
+			 * time, so a multimon session shows the bar over whichever
+			 * window the pointer is actually in. */
+			if (isConnected() && (_floatbarWindowId != ev.windowID))
+			{
+				_floatbarWindowId = ev.windowID;
+				std::ignore = _floatbar.attach(window->renderer(), window->rect().w);
+				redrawFloatbarOnly();
+			}
 			return restoreCursor();
+		case SDL_EVENT_WINDOW_MOUSE_LEAVE:
+			if (ev.windowID == _floatbarWindowId)
+			{
+				_floatbar.handleMouseLeft();
+				bool changed = false;
+				while (_floatbar.tick())
+					changed = true;
+				if (changed)
+					redrawFloatbarOnly();
+			}
+			break;
 		case SDL_EVENT_WINDOW_DISPLAY_SCALE_CHANGED:
 			if (!resizeToScale(window))
 				return false;
@@ -1155,6 +1184,8 @@ bool SdlContext::handleEvent(const SDL_WindowEvent& ev)
 				return false;
 			if (!window->fill())
 				return false;
+			if (ev.windowID == _floatbarWindowId)
+				std::ignore = _floatbar.attach(window->renderer(), window->rect().w);
 			if (!drawToWindow(*window))
 				return false;
 			if (!restoreCursor())
@@ -1436,12 +1467,61 @@ bool SdlContext::handleEvent(const SDL_Event& ev)
 
 		{
 			const auto& cev = ev.motion;
+			/* Floatbar gets first refusal, in render (pixel) coordinates --
+			 * it is a screen-space overlay drawn in the same space as
+			 * SdlWindow's render target, not the RDP framebuffer, so it
+			 * needs eventToPixelCoordinates()'s window-to-render conversion
+			 * (DPI scale on HiDPI Wayland outputs) but not the RDP-specific
+			 * local-scale/monitor-offset adjustments handleEvent(cev) below
+			 * applies afterwards. tick() is driven directly off real motion
+			 * events rather than a separate timer (see coffee_floatbar.hpp),
+			 * so it has to run here even when the bar doesn't consume the
+			 * event outright. */
+			if (cev.windowID == _floatbarWindowId)
+			{
+				SDL_Event copy{};
+				copy.motion = cev;
+				std::ignore = eventToPixelCoordinates(cev.windowID, copy);
+				const bool consumed = _floatbar.handleMouseMotion(copy.motion.x, copy.motion.y);
+				const bool animated = _floatbar.tick();
+				/* Redraw on `consumed` too, not just `animated`: moving the
+				 * pointer from one button to another updates which button
+				 * is highlighted (handleMouseMotion() above) without ever
+				 * changing the bar's Y-slide offset, so gating the redraw on
+				 * `animated` alone meant the very first hover painted (it
+				 * happened to coincide with the reveal animation or an RDP
+				 * frame update) and every hover after that silently updated
+				 * state with nothing ever repainting to show it. */
+				if (consumed || animated)
+					redrawFloatbarOnly();
+				if (consumed)
+					return true;
+			}
 			return handleEvent(cev);
 		}
 		case SDL_EVENT_MOUSE_BUTTON_DOWN:
 		case SDL_EVENT_MOUSE_BUTTON_UP:
 		{
 			const auto& cev = ev.button;
+			if (cev.windowID == _floatbarWindowId)
+			{
+				SDL_Event copy{};
+				copy.button = cev;
+				std::ignore = eventToPixelCoordinates(cev.windowID, copy);
+				const bool consumed = (ev.type == SDL_EVENT_MOUSE_BUTTON_DOWN)
+				                          ? _floatbar.handleMouseButtonDown(copy.button.x, copy.button.y)
+				                          : _floatbar.handleMouseButtonUp(copy.button.x, copy.button.y);
+				if (consumed)
+				{
+					if (ev.type == SDL_EVENT_MOUSE_BUTTON_UP)
+						/* A click may have toggled Grab/Keep-alive/Pin,
+						 * which changes button labels -- repaint now rather
+						 * than waiting for the next RDP frame or mouse
+						 * motion tick. */
+						redrawFloatbarOnly();
+					return true;
+				}
+			}
 			return handleEvent(cev);
 		}
 		case SDL_EVENT_MOUSE_WHEEL:
@@ -1467,6 +1547,15 @@ bool SdlContext::handleEvent(const SDL_Event& ev)
 
 void SdlContext::configureIdleKeepAlive(unsigned intervalSeconds, const std::string& combo)
 {
+	/* Remembered even when this call disables the timer (interval 0), so the
+	 * floatbar's Keep-alive button (see toggleIdleKeepAlive()) can restore
+	 * the real configured interval/combo on re-enable instead of losing it. */
+	if (intervalSeconds > 0)
+	{
+		_idleConfiguredInterval = intervalSeconds;
+		_idleConfiguredCombo = combo;
+	}
+
 	_idleComboRdpScancodes.clear();
 	_idleTimer.configure(intervalSeconds);
 
@@ -1527,6 +1616,154 @@ void SdlContext::checkIdleKeepAlive()
 		std::ignore = freerdp_input_send_keyboard_event_ex(input, TRUE, FALSE, scancode);
 	for (auto it = _idleComboRdpScancodes.rbegin(); it != _idleComboRdpScancodes.rend(); ++it)
 		std::ignore = freerdp_input_send_keyboard_event_ex(input, FALSE, FALSE, *it);
+}
+
+void SdlContext::toggleIdleKeepAlive()
+{
+	if (_idleTimer.enabled())
+	{
+		/* Deliberately not configureIdleKeepAlive(0, ...): that would
+		 * overwrite _idleConfiguredInterval/_idleConfiguredCombo with the
+		 * disabled state, losing the real setting to restore later. */
+		_idleTimer.configure(0);
+		_idleComboRdpScancodes.clear();
+	}
+	else if (_idleConfiguredInterval > 0)
+	{
+		configureIdleKeepAlive(_idleConfiguredInterval, _idleConfiguredCombo);
+	}
+	_floatbar.setKeepAliveEnabled(_idleTimer.enabled());
+}
+
+bool SdlContext::configureFloatbar()
+{
+	_floatbar.setCaptureEnabled(grabKeyboard());
+	_floatbar.setKeepAliveEnabled(_idleTimer.enabled());
+
+	_floatbar.setActionCallback(
+	    [this](SdlFloatbar::ButtonId id)
+	    {
+		    switch (id)
+		    {
+			    case SdlFloatbar::BUTTON_DISCONNECT:
+				    freerdp_abort_connect_context(context());
+				    std::ignore = sdl_push_quit();
+				    break;
+			    case SdlFloatbar::BUTTON_FULLSCREEN:
+				    std::ignore = toggleFullscreen();
+				    break;
+			    case SdlFloatbar::BUTTON_CAPTURE_KEYBOARD:
+			    {
+				    const bool enable = !grabKeyboard();
+				    auto& input = getInputChannelContext();
+				    if (enable)
+				    {
+					    /* Force a fresh grab request rather than a same-value
+					     * no-op: some Wayland compositors only re-evaluate the
+					     * keyboard-shortcuts-inhibit request (needed for Super)
+					     * on a genuine off->on transition, not a redundant
+					     * "still on" call. */
+					    std::ignore = input.keyboard_grab(_floatbarWindowId, false);
+				    }
+				    std::ignore = input.keyboard_grab(_floatbarWindowId, enable);
+				    _floatbar.setCaptureEnabled(grabKeyboard());
+				    break;
+			    }
+			    case SdlFloatbar::BUTTON_CTRL_ALT_DEL:
+			    {
+				    /* Press in order, release in reverse -- same convention
+				     * checkIdleKeepAlive() uses for its combo injection. */
+				    static const std::array<UINT32, 3> combo = { RDP_SCANCODE_LCONTROL,
+					                                              RDP_SCANCODE_LMENU,
+					                                              RDP_SCANCODE_DELETE };
+				    auto* input = context()->input;
+				    for (auto scancode : combo)
+					    std::ignore = freerdp_input_send_keyboard_event_ex(input, TRUE, FALSE, scancode);
+				    for (auto it = combo.rbegin(); it != combo.rend(); ++it)
+					    std::ignore = freerdp_input_send_keyboard_event_ex(input, FALSE, FALSE, *it);
+				    break;
+			    }
+			    case SdlFloatbar::BUTTON_SEND_SUPER:
+			    {
+				    auto* input = context()->input;
+				    std::ignore =
+				        freerdp_input_send_keyboard_event_ex(input, TRUE, FALSE, RDP_SCANCODE_LWIN);
+				    std::ignore =
+				        freerdp_input_send_keyboard_event_ex(input, FALSE, FALSE, RDP_SCANCODE_LWIN);
+				    break;
+			    }
+			    case SdlFloatbar::BUTTON_KEEPALIVE:
+				    toggleIdleKeepAlive();
+				    break;
+			    case SdlFloatbar::BUTTON_PIN:
+				    std::ignore = _floatbar.togglePin();
+				    break;
+			    default:
+				    break;
+		    }
+	    });
+
+	/* attach() (called from attachFloatbar() below) creates SDL textures and
+	 * a TTF text engine bound to the session window's renderer -- on an
+	 * OpenGL-backed renderer those must only be touched from the thread
+	 * that owns the GL context. This function runs on the RDP connect
+	 * thread (postConnect() is a FreeRDP instance callback invoked from
+	 * inside freerdp_connect(), see sdl_client_thread_connect()), not the
+	 * main SDL thread, so the actual attach has to hop over there. Mirrors
+	 * waitForWindowsCreated()'s exact pattern. */
+	{
+		std::unique_lock<CriticalSection> lock(_critical);
+		_floatbarConfiguredEvent.clear();
+		if (!sdl_push_user_event(SDL_EVENT_USER_CONFIGURE_FLOATBAR, this))
+			return false;
+	}
+
+	HANDLE handles[] = { _floatbarConfiguredEvent.handle(), freerdp_abort_event(context()) };
+	const DWORD rc = WaitForMultipleObjects(ARRAYSIZE(handles), handles, FALSE, INFINITE);
+	return rc == WAIT_OBJECT_0;
+}
+
+bool SdlContext::attachFloatbar()
+{
+	ScopeGuard guard([&]() { _floatbarConfiguredEvent.set(); });
+
+	auto* first = getFirstWindow();
+	if (!first)
+		return true;
+
+	_floatbarWindowId = first->id();
+	if (!_floatbar.attach(first->renderer(), first->rect().w))
+		return false;
+
+	/* Capture Keyboard defaults on (_grabKeyboard's default) so typing works
+	 * out of the box, but nothing before this point has actually engaged the
+	 * real SDL_SetWindowKeyboardGrab() yet -- do that now so the floatbar's
+	 * "Capture Kbd: On" default reflects reality, not just the flag. Same
+	 * drop-then-reassert as the button's own BUTTON_CAPTURE_KEYBOARD case. */
+	std::ignore = getInputChannelContext().keyboard_grab(_floatbarWindowId, false);
+	std::ignore = getInputChannelContext().keyboard_grab(_floatbarWindowId, true);
+	_floatbar.setCaptureEnabled(grabKeyboard());
+
+	return true;
+}
+
+void SdlContext::drawFloatbarOverlay(const SdlWindow& window, SDL_Renderer* renderer)
+{
+	if (!_floatbar.attached() || (window.id() != _floatbarWindowId))
+		return;
+	std::ignore = _floatbar.render();
+	WINPR_UNUSED(renderer); /* SdlFloatbar renders through its own attached renderer handle */
+}
+
+void SdlContext::redrawFloatbarOnly()
+{
+	if (!isConnected())
+		return;
+	auto* window = getWindowForId(_floatbarWindowId);
+	if (!window)
+		return;
+	window->updateSurface(
+	    [this, window](SDL_Renderer* renderer) { drawFloatbarOverlay(*window, renderer); });
 }
 
 COMMAND_LINE_ARGUMENT_A* SdlContext::args()

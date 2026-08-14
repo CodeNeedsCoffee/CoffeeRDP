@@ -97,4 +97,17 @@ class SdlWidget
 	SDL_FRect _rect = {};
 	bool _wrap = false;
 	size_t _text_width = 0;
+
+	/* Cache of the last text render: update_text() re-rasterizes via TTF and
+	 * re-uploads a fresh GPU texture on every call by default, which is fine
+	 * for a dialog whose text changes and redraws rarely, but far too
+	 * expensive for something redrawn on every mouse-motion event (the
+	 * floatbar) with text that usually hasn't actually changed since the
+	 * last redraw. Reused whenever the incoming text matches what's already
+	 * cached; invalidated by set_wrap() since that changes how the same
+	 * text string would be laid out. */
+	std::string _renderedText;
+	std::shared_ptr<SDL_Texture> _renderedTexture;
+	SDL_FRect _renderedSrc = {};
+	SDL_FRect _renderedDst = {};
 };

@@ -19,6 +19,7 @@
  */
 #pragma once
 
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -81,7 +82,15 @@ class SdlWindow
 
 	[[nodiscard]] bool fill(Uint8 r = 0x00, Uint8 g = 0x00, Uint8 b = 0x00, Uint8 a = 0xff);
 	[[nodiscard]] bool blit(SDL_Surface* surface, const SDL_Rect& src, SDL_Rect& dst);
-	void updateSurface();
+
+	/** Copies the accumulated RDP render target to the window and presents.
+	 *  `overlay`, if set, is invoked with the render target already switched
+	 *  to the window (nullptr target) after the RDP content is blitted but
+	 *  before the final present -- e.g. the floatbar (see
+	 *  SdlContext::drawFloatbarOverlay()), which must never be baked into
+	 *  the persistent RDP render target itself or stale bar pixels would
+	 *  survive under areas the next RDP dirty-rect update doesn't touch. */
+	void updateSurface(const std::function<void(SDL_Renderer*)>& overlay = {});
 
   protected:
 	SdlWindow(SDL_DisplayID id, const std::string& title, const SDL_Rect& rect, Uint32 flags);

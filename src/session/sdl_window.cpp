@@ -537,7 +537,7 @@ bool SdlWindow::blit(SDL_Surface* surface, const SDL_Rect& srcRect, SDL_Rect& ds
 	return true;
 }
 
-void SdlWindow::updateSurface()
+void SdlWindow::updateSurface(const std::function<void(SDL_Renderer*)>& overlay)
 {
 	if (!_renderer)
 		return;
@@ -549,6 +549,8 @@ void SdlWindow::updateSurface()
 		return;
 	if (!SDL_RenderTexture(_renderer, _renderTarget, nullptr, nullptr))
 		return;
+	if (overlay)
+		overlay(_renderer);
 	if (!SDL_RenderPresent(_renderer))
 		return;
 }
