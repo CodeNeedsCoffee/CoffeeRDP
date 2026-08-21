@@ -1191,28 +1191,12 @@ void onShutdown(GApplication*, gpointer data)
 	}
 }
 
-void onBackgroundRequested(GObject* source, GAsyncResult* result, gpointer data)
+/** Hides the window and keeps the process alive. The window is never
+ *  destroyed on close, only hidden, so onActivate() can bring the very same
+ *  one back (and so nothing here ever destroys a window from inside a
+ *  callback, which is what crashed an earlier version of this code). */
+void enterBackground(AppState* st)
 {
-	auto* st = static_cast<AppState*>(data);
-	GError* error = nullptr;
-	gboolean granted = xdp_portal_request_background_finish(XDP_PORTAL(source), result, &error);
-
-	if (!granted)
-	{
-		g_printerr("coffeerdp: background permission denied or unavailable%s%s\n",
-		          error ? ": " : "", error && error->message ? error->message : "");
-		if (error)
-			g_error_free(error);
-		st->backgroundDenied = true;
-		/* We held the close for this async round trip (see
-		 * onWindowCloseRequest()); now that the answer is "no", actually
-		 * finish closing. gtk_window_destroy() doesn't re-emit
-		 * "close-request", so this can't loop back here. */
-		gtk_window_destroy(GTK_WINDOW(st->window));
-		return;
-	}
-
-	st->backgroundGranted = true;
 	if (!st->holding)
 	{
 		g_application_hold(G_APPLICATION(st->app));
@@ -1221,46 +1205,84 @@ void onBackgroundRequested(GObject* source, GAsyncResult* result, gpointer data)
 	gtk_widget_set_visible(GTK_WIDGET(st->window), FALSE);
 }
 
+void onBackgroundRequested(GObject* source, GAsyncResult* result, gpointer data)
+{
+	auto* st = static_cast<AppState*>(data);
+	GError* error = nullptr;
+	gboolean granted = xdp_portal_request_background_finish(XDP_PORTAL(source), result, &error);
+
+	if (granted)
+		st->backgroundGranted = true;
+	else
+	{
+		g_printerr("coffeerdp: background permission denied or unavailable%s%s\n",
+		          error ? ": " : "", error && error->message ? error->message : "");
+		/* Most common cause by far, and it isn't obvious from the portal's
+		 * own error text: xdg-desktop-portal derives a non-sandboxed app's
+		 * ID from the systemd scope it was launched into
+		 * ("app[-<launcher>]-<AppID>-<RANDOM>.scope", see
+		 * xdp-app-info-host.c). Started from a terminal the process
+		 * inherits a "vte-spawn-*.scope" instead, which matches nothing, so
+		 * the portal detects no AppId, its unconditional
+		 * enable_autostart_sync() call fails, and background.c turns that
+		 * into an overall request failure (`allowed = FALSE`,
+		 * RESPONSE_OTHER) even when the permission itself would have been
+		 * granted. Launching from the desktop entry, so GNOME creates a
+		 * properly-named scope, is what makes the portal path work. */
+		g_printerr("coffeerdp: staying in the background anyway; GNOME won't list it under\n"
+		          "          Background Activity without a portal grant. Launch from the\n"
+		          "          desktop entry (not a terminal) to get the portal prompt.\n"
+		          "          Quit from the app menu or Ctrl+Q to exit fully.\n");
+		if (error)
+			g_error_free(error);
+		st->backgroundDenied = true;
+	}
+
+	/* Either way we background: the portal grant controls whether GNOME
+	 * *lists* us as a background app, not whether we're able to keep
+	 * running. Deliberate call (see PLAN.md Phase 7.5): the whole point of
+	 * the resident auth helper is that closing the window doesn't throw
+	 * away a signed-in session, and that shouldn't silently stop applying
+	 * in the contexts where the portal can't identify us. `app.quit`
+	 * (Ctrl+Q / the menu) is the always-available real exit. */
+	enterBackground(st);
+}
+
 /** Runs on the main window's close button/Escape/Alt+F4. Ordinarily that
- *  would just close the window and (with no other hold on the
- *  application) quit -- taking the resident auth helper down with it, so
- *  the very benefit Phase 7.5 exists for would only last until you close
- *  the window, not until you actually quit. Instead, this asks the XDG
- *  Background portal for permission to keep running; GNOME shows its
- *  standard "X wants to run in the background" prompt the first time (and
- *  lists coffeerdp under Settings -> Apps -> Background Activity from then
- *  on, where the user can revoke it). If that's denied, or the portal
- *  isn't available at all (non-GNOME/no portal), this falls back to
- *  closing for real -- the feature is strictly additive, never a reason a
- *  close doesn't work. */
-gboolean onWindowCloseRequest(GtkWindow* window, gpointer data)
+ *  would destroy the window and, with no other hold on the application,
+ *  quit -- taking the resident auth helper with it, so the very benefit
+ *  Phase 7.5 exists for would only last until you close the window rather
+ *  than until you actually quit. Instead this hides the window and keeps
+ *  running, asking the XDG Background portal on the first close so GNOME
+ *  shows its standard "X wants to run in the background" prompt and lists
+ *  coffeerdp under Settings -> Apps -> Background Activity (where the grant
+ *  can be revoked). If the portal denies or can't be used at all, we still
+ *  background, just without that listing: see onBackgroundRequested(). */
+gboolean onWindowCloseRequest(GtkWindow*, gpointer data)
 {
 	auto* st = static_cast<AppState*>(data);
 
-	if (st->backgroundDenied)
-		return FALSE; // already answered "no" this run, don't ask again
-
-	if (st->backgroundGranted)
+	// Portal already answered once this run: don't ask again on every close.
+	if (st->backgroundGranted || st->backgroundDenied)
 	{
-		if (!st->holding)
-		{
-			g_application_hold(G_APPLICATION(st->app));
-			st->holding = true;
-		}
-		gtk_widget_set_visible(GTK_WIDGET(window), FALSE);
+		enterBackground(st);
 		return TRUE;
 	}
 
 	if (!st->portal)
 		st->portal = xdp_portal_new();
 
-	XdpParent* parent = xdp_parent_new_gtk(window);
+	XdpParent* parent = xdp_parent_new_gtk(GTK_WINDOW(st->window));
 	static char reason[] = "Keep your Entra ID sign-in active for reconnects";
 	xdp_portal_request_background(st->portal, parent, reason, nullptr, XDP_BACKGROUND_FLAG_NONE,
 	                              nullptr, onBackgroundRequested, st);
 	xdp_parent_free(parent);
 
-	return TRUE; // hold the close until the async portal round trip answers
+	/* Hide immediately rather than waiting on the async answer: the close
+	 * should feel instant, and the answer only decides whether GNOME lists
+	 * us, not whether we stay alive. */
+	enterBackground(st);
+	return TRUE;
 }
 
 void onActivate(GtkApplication* app, gpointer data)

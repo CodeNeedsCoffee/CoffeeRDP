@@ -75,7 +75,7 @@ static BOOL sdl_webview_get_rdsaad_access_token(freerdp* instance, const char* s
 	                                                         FREERDP_CLIENT_AAD_AUTH_REQUEST,
 	                                                         scope),
 	                              free);
-	const std::string title = "FreeRDP WebView - AAD access token";
+	const std::string title = "RDP WebView - AAD Auth";
 	std::string code;
 	auto rc = webview_impl_run(title, request.get(), code);
 	if (!rc || code.empty())
@@ -98,7 +98,7 @@ static BOOL sdl_webview_get_avd_access_token(freerdp* instance, char** token)
 	                                                         FREERDP_CLIENT_AAD_AVD_AUTH_REQUEST),
 	                              free);
 
-	const std::string title = "FreeRDP WebView - AVD access token";
+	const std::string title = "RDP WebView - AVD Auth";
 	std::string code;
 	auto rc = webview_impl_run(title, request.get(), code);
 	if (!rc || code.empty())
