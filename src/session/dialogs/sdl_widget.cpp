@@ -275,6 +275,12 @@ const SDL_FRect& SdlWidget::rect() const
 	return _rect;
 }
 
+void SdlWidget::moveBy(float dx, float dy)
+{
+	_rect.x += dx;
+	_rect.y += dy;
+}
+
 bool SdlWidget::clear() const
 {
 	if (!_renderer)

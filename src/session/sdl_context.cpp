@@ -1639,6 +1639,8 @@ bool SdlContext::configureFloatbar()
 {
 	_floatbar.setCaptureEnabled(grabKeyboard());
 	_floatbar.setKeepAliveEnabled(_idleTimer.enabled());
+	_floatbar.setFullscreenEnabled(fullscreen());
+	_floatbar.setShortcutsEnabled(getInputChannelContext().hotkeysEnabled());
 
 	_floatbar.setActionCallback(
 	    [this](SdlFloatbar::ButtonId id)
@@ -1667,6 +1669,21 @@ bool SdlContext::configureFloatbar()
 				    }
 				    std::ignore = input.keyboard_grab(_floatbarWindowId, enable);
 				    _floatbar.setCaptureEnabled(grabKeyboard());
+				    break;
+			    }
+			    case SdlFloatbar::BUTTON_SHORTCUTS:
+			    {
+				    /* Separate from Capture Keyboard above: that gates whether
+				     * ordinary keystrokes reach the remote session at all, this
+				     * only gates sdlInput's own Right-Shift+<key> hotkey block
+				     * (minimize, fullscreen, resizeable, grab, disconnect) --
+				     * see sdlInput::setHotkeysEnabled()'s doc comment. Session
+				     * starting state comes from CoffeeProfile::disableShortcuts
+				     * via /disable-shortcuts; this is the mid-session override
+				     * the user asked for on top of that. */
+				    auto& input = getInputChannelContext();
+				    input.setHotkeysEnabled(!input.hotkeysEnabled());
+				    _floatbar.setShortcutsEnabled(input.hotkeysEnabled());
 				    break;
 			    }
 			    case SdlFloatbar::BUTTON_CTRL_ALT_DEL:
@@ -1698,6 +1715,19 @@ bool SdlContext::configureFloatbar()
 			    case SdlFloatbar::BUTTON_PIN:
 				    std::ignore = _floatbar.togglePin();
 				    break;
+			    case SdlFloatbar::BUTTON_MINIMIZE:
+			    {
+				    /* The bar is the only chrome an SDL session window has --
+				     * no OS titlebar to minimize from -- so this is the
+				     * button's entire reason to exist. Targets whichever
+				     * window the bar is currently attached to (the pointer's
+				     * window, in a multimon session), matching every other
+				     * floatbar action's window scoping. */
+				    auto* window = getWindowForId(_floatbarWindowId);
+				    if (window)
+					    std::ignore = SDL_MinimizeWindow(window->window());
+				    break;
+			    }
 			    default:
 				    break;
 		    }
@@ -2101,6 +2131,14 @@ bool SdlContext::setFullscreen(bool enter, bool forceOriginalDisplay)
 			return false;
 	}
 	_fullscreen = enter;
+	/* Single choke point for every path that changes fullscreen state
+	 * (initial connect, F11-equivalent, and the floatbar's own Maximize
+	 * button), so the button's icon/highlight stay in sync regardless of
+	 * which one fired -- same reasoning as setKeepAliveEnabled()'s call
+	 * sites. Safe to call before the floatbar has attached to a window: it
+	 * just records the state, matching setKeepAliveEnabled()/
+	 * setCaptureEnabled()'s existing tolerance for that. */
+	_floatbar.setFullscreenEnabled(enter);
 	return true;
 }
 

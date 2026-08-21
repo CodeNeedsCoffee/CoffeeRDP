@@ -10,13 +10,28 @@
  * placement bug fixed in Phase 5, see PLAN.md section 3), so an overlay is
  * the only design that behaves the same on both backends.
  *
- * The bar is a compact pill sized to its button row, not a full-width strip
- * -- like Windows' own RDP client (mstsc)'s floating connection bar -- and
- * can be dragged left/right along the top edge by its background (not its
+ * The bar is a compact pill sized to its content, not a full-width strip --
+ * like Windows' own RDP client (mstsc)'s floating connection bar -- and can
+ * be dragged left/right along the top edge by its background (not its
  * buttons). The animation/hit-testing/drag state itself lives in
  * CoffeeFloatbarState (coffee_floatbar.hpp); this class owns the SDL-side
  * rendering and the SdlButtonList widgets already used by the connection
  * dialogs.
+ *
+ * Redesigned (still Phase 6, later pass) into a compact icon row -- Pin,
+ * overflow menu, then (after a small gap and a divider line) the window
+ * controls Minimize, Maximize/restore, Close (Windows' own left-to-right
+ * order) -- with the less-frequently-used
+ * actions (keyboard capture, Ctrl+Alt+Del, Send Super, keep-alive) relocated
+ * into a dropdown opened from the overflow button, rather than all seven
+ * sitting in the bar as equally-weighted text buttons. The dropdown is its
+ * own SdlButtonList (_menuButtons), positioned below the bar and only
+ * populated/hit-tested while open; CoffeeFloatbarState::setForceShown() is
+ * how it keeps the bar from auto-hiding out from under a click travelling
+ * down into it (see that method's doc comment). A six-dot grip in the right
+ * margin marks where the bar can be dragged -- background clicks there
+ * already moved it (see handleMouseButtonDown()); the grip just makes that
+ * discoverable.
  */
 #pragma once
 
@@ -42,6 +57,14 @@ class SdlFloatbar
 		BUTTON_SEND_SUPER,
 		BUTTON_KEEPALIVE,
 		BUTTON_PIN,
+		BUTTON_MINIMIZE,
+		BUTTON_SHORTCUTS,
+		/** Opens/closes the dropdown. Never reaches ActionCallback -- purely
+		 *  an SdlFloatbar-internal UI concern, handled entirely inside
+		 *  handleMouseButtonUp(). Kept in the public enum anyway (rather than
+		 *  a private-only id) so it reads the same way as every other button
+		 *  here, including in the rebuildButtons() spec list. */
+		BUTTON_MENU,
 	};
 
 	using ActionCallback = std::function<void(ButtonId)>;
@@ -73,9 +96,10 @@ class SdlFloatbar
 	 *  frame having arrived. */
 	[[nodiscard]] bool tick();
 
-	/** Draws the bar at its current animated position onto the attached
-	 *  renderer. Caller must already have the renderer's render target set
-	 *  to the window (nullptr target) -- see SdlWindow::updateSurface(). */
+	/** Draws the bar (and, while open, the dropdown menu) at its current
+	 *  animated position onto the attached renderer. Caller must already
+	 *  have the renderer's render target set to the window (nullptr target)
+	 *  -- see SdlWindow::updateSurface(). */
 	[[nodiscard]] bool render();
 
 	void setKeepAliveEnabled(bool enabled);
@@ -95,48 +119,117 @@ class SdlFloatbar
 		return _captureEnabled;
 	}
 
+	/** Whether the session is currently fullscreen -- drives the maximize
+	 *  button's icon (plain square vs. the "restore" pair) and its
+	 *  persistent highlight, same idea as setKeepAliveEnabled()/
+	 *  setCaptureEnabled() above. The caller (SdlContext) is the source of
+	 *  truth for the actual state; this only affects what gets drawn. */
+	void setFullscreenEnabled(bool enabled);
+	[[nodiscard]] bool fullscreenEnabled() const
+	{
+		return _fullscreenEnabled;
+	}
+
+	/** Whether the session's Right-Shift+<key> shortcuts (sdlInput's hotkey
+	 *  block -- minimize, fullscreen, resizeable, grab, disconnect) are
+	 *  live. A profile can start a session with these off
+	 *  (CoffeeProfile::disableShortcuts); this is what lets the dropdown's
+	 *  "Local Shortcuts" row show and flip the *current* state regardless of
+	 *  where it started. sdlInput is the actual source of truth (see
+	 *  sdlInput::setHotkeysEnabled()) -- same division of responsibility as
+	 *  setCaptureEnabled() above, this only affects what gets drawn. */
+	void setShortcutsEnabled(bool enabled);
+	[[nodiscard]] bool shortcutsEnabled() const
+	{
+		return _shortcutsEnabled;
+	}
+
 	/** Returns the new pinned state. */
 	bool togglePin();
 	[[nodiscard]] bool pinned() const;
 
   private:
 	void rebuildButtons();
+	/** Closes the dropdown if open (no-op otherwise) and rebuilds so the
+	 *  change is reflected on the next render(). */
+	void closeMenu();
 
 	CoffeeFloatbarState _state;
 	std::shared_ptr<SDL_Renderer> _renderer; // non-owning: SdlWindow owns the real SDL_Renderer
-	SdlButtonList _buttons;
+	SdlButtonList _buttons;                  // primary row: Pin, Menu, Minimize, Maximize, Close
+	/** The relocated actions, laid out as a single column. Only populated
+	 *  (and only considered for hit-testing/rendering) while _menuOpen. */
+	SdlButtonList _menuButtons;
 	Sint32 _width = 0;
 	bool _keepAliveEnabled = true;
 	bool _captureEnabled = true;
+	bool _fullscreenEnabled = false;
+	bool _shortcutsEnabled = true;
+	bool _menuOpen = false;
+	/** Valid only while _menuOpen; recomputed by rebuildButtons(). */
+	SDL_FRect _menuRect{};
+	/** X of the divider between the Pin/Menu group and the window-control
+	 *  group (Maximize/Minimize/Close); recomputed by rebuildButtons(). */
+	float _groupDividerX = 0.0f;
+	/** Set when a button-down dismisses an open menu, so the matching
+	 *  button-up (which by then sees _menuOpen already false) is still
+	 *  consumed instead of falling through and being forwarded to the RDP
+	 *  session as an unmatched click-release. Cleared at the top of the next
+	 *  button-down. */
+	bool _suppressNextButtonUp = false;
 	ActionCallback _onAction;
 
 	/* Taller than the original 32px -- live testing found the click target
 	 * too small/short, on top of the separate stay-open-while-clicking bug
-	 * fixed in coffee_floatbar.cpp's tick() (see PLAN.md Phase 6). */
-	static constexpr int kBarHeight = 38;
+	 * fixed in coffee_floatbar.cpp's tick() (see PLAN.md Phase 6). Bumped
+	 * again in the icon-row redesign's second pass for a bigger, easier
+	 * click target now that the bar only needs to fit a handful of icons
+	 * rather than seven text buttons. */
+	static constexpr int kBarHeight = 52;
 	static constexpr int kPeekPx = 4;
 	static constexpr int kRevealZonePx = 14;
 	static constexpr int kStepPx = 4;
-	static constexpr Sint32 kButtonHeight = 30;
-	/* Wide enough that even "Capture Kbd: On/Off" and "Keep-alive: On/Off"
-	 * (the longest labels) fit without SdlWidget::render_text()'s "text too
-	 * wide for the button, crop from the left" behavior kicking in --
-	 * confirmed live at kButtonWidth=110 that it does (e.g. "Disconnect"
-	 * rendered as "isconnect"). Widened again in step with kButtonHeight:
-	 * that crop check scales text to the button's height, so a taller
-	 * button needs proportionally more width for the same label to still
-	 * fit -- there's no way to measure actual text pixel width from here to
-	 * confirm exactly, so this carries margin on top of the estimate. */
-	static constexpr Sint32 kButtonWidth = 200;
-	static constexpr Sint32 kButtonCount = 7; // must match rebuildButtons()'s ids/labels vectors
-	/* Mirrors SdlButtonList::populate()'s (sdl_buttons.cpp) own internal
-	 * button-to-button spacing constant, also named hpadding there. */
-	static constexpr Sint32 kButtonHPadding = 10;
+
+	/* Icon buttons are square and have no visible resting background of
+	 * their own (see sdl_button.cpp) -- they read as part of the bar, sized
+	 * for a comfortable click/tap target without needing the wide text
+	 * buttons the previous seven-button layout required. */
+	static constexpr Sint32 kIconButtonSize = 38;
+	static constexpr Sint32 kIconButtonGap = 8;
+	static constexpr Sint32 kIconButtonCount = 5; // Pin, Menu, Maximize, Minimize, Close
+	/* Extra gap (on top of kIconButtonGap) between Menu and Maximize --
+	 * visually separates "app actions" (Pin, the overflow menu) from the
+	 * window-control cluster (Maximize/Minimize/Close), same grouping
+	 * mstsc/most OS titlebars use. Also where the divider line (render())
+	 * sits, at the middle of this gap -- see rebuildButtons()'s
+	 * _groupDividerX derivation. */
+	static constexpr Sint32 kGroupGapExtra = 16;
+	/* Margin on each side of the icon row, also the bar's own drag handle --
+	 * background area that isn't a button, same purpose as the original
+	 * design's kOuterMargin. Sized to comfortably fit the grip glyph (see
+	 * render()) in the right margin, not just a minimal gutter. */
+	static constexpr Sint32 kOuterMargin = 22;
 	static constexpr Sint32 kButtonRowWidth =
-	    kButtonCount * (kButtonWidth + kButtonHPadding) + kButtonHPadding;
-	/* Extra breathing room around the button row so there's a bar-background
-	 * area to grab and drag that isn't also a button -- like the title-bar
-	 * area of Windows' own floating RDP connection bar. */
-	static constexpr Sint32 kOuterMargin = 10;
+	    kIconButtonCount * (kIconButtonSize + kIconButtonGap) + kIconButtonGap + kGroupGapExtra;
 	static constexpr Sint32 kBarWidth = kButtonRowWidth + 2 * kOuterMargin;
+	static constexpr float kBarCornerRadius = 16.0f;
+
+	/* Wide enough that "Capture Kbd: On/Off" (the longest label) doesn't hit
+	 * SdlWidget::render_text()'s "text too wide for the button, crop from the
+	 * left" behavior -- confirmed live that a narrower width does (renders
+	 * as "apture Kbd: On"). Rows are taller than the original design's text
+	 * buttons (kMenuRowHeight=40 vs. the old kButtonHeight=30), and that
+	 * matters here: render_text() scales the glyph to the button's *height*,
+	 * so a taller row needs proportionally more width for the same string,
+	 * same relationship the original design's own kButtonWidth comment
+	 * describes. */
+	static constexpr Sint32 kMenuWidth = 320;
+	static constexpr Sint32 kMenuRowHeight = 40;
+	/* Capture Kbd, Ctrl+Alt+Del, Send Super, Keep-alive, Local Shortcuts --
+	 * Fullscreen moved to its own Maximize/restore icon button in the
+	 * primary row. Matches rebuildButtons()'s menu spec list. */
+	static constexpr Sint32 kMenuButtonCount = 5;
+	static constexpr Sint32 kMenuInnerPadding = 6;
+	static constexpr Sint32 kMenuGapBelowBar = 8;
+	static constexpr float kMenuCornerRadius = 12.0f;
 };

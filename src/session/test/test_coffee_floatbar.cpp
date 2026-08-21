@@ -150,6 +150,34 @@ void check_pin_forces_shown()
 	expect(bar.offsetY() == -26, "unpinning re-applies the pointer-driven target");
 }
 
+void check_force_shown_independent_of_pinned()
+{
+	CoffeeFloatbarState bar;
+	configureDefault(bar);
+
+	bar.noteMouseY(500); // far from the top edge
+	bar.setForceShown(true);
+
+	int ticks = 0;
+	while (bar.tick())
+	{
+		if (++ticks > 100)
+			break;
+	}
+	expect(bar.offsetY() == 0, "forceShown keeps the bar fully shown with the pointer far away");
+	expect(!bar.pinned(), "forceShown does not itself flip pinned() -- the pin icon must only "
+	                      "reflect an actual user pin, not the dropdown menu happening to be open");
+
+	bar.setForceShown(false);
+	ticks = 0;
+	while (bar.tick())
+	{
+		if (++ticks > 100)
+			break;
+	}
+	expect(bar.offsetY() == -26, "clearing forceShown re-applies the pointer-driven target");
+}
+
 void check_hit_test()
 {
 	CoffeeFloatbarState bar;
@@ -268,6 +296,7 @@ int main()
 	check_stays_open_while_moving_within_the_bar();
 	check_retract_when_pointer_leaves();
 	check_pin_forces_shown();
+	check_force_shown_independent_of_pinned();
 	check_hit_test();
 	check_drag();
 	check_drag_forces_shown();

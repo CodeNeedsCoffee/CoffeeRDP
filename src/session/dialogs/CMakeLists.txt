@@ -29,6 +29,8 @@ set(SRCS
     sdl_connection_dialog_hider.cpp
     sdl_blend_mode_guard.cpp
     sdl_blend_mode_guard.hpp
+    sdl_vector_icons.cpp
+    sdl_vector_icons.hpp
     sdl_floatbar.cpp
     sdl_floatbar.hpp
 )

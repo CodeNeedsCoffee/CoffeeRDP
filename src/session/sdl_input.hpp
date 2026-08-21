@@ -67,6 +67,25 @@ class sdlInput
 	 *  are translated (see handleEvent(const SDL_KeyboardEvent&)). */
 	[[nodiscard]] UINT32 scancode_to_rdp(Uint32 scancode);
 
+	/** Right-Shift+<key> shortcuts (minimize, fullscreen, resizeable, grab,
+	 *  disconnect -- see handleEvent(const SDL_KeyboardEvent&)'s hotkey
+	 *  block). Starts from prefToEnabled()/the sdl-freerdp.json config file,
+	 *  same as upstream; CoffeeRDP overrides that starting value from a
+	 *  profile's disableShortcuts field (see /disable-shortcuts in
+	 *  sdl_freerdp.cpp's main()), and this setter is also what the
+	 *  floatbar's dropdown toggle calls to flip it mid-session
+	 *  (sdl_context.cpp's BUTTON_SHORTCUTS case). Ordinary keystrokes are a
+	 *  separate concern -- see grabKeyboard()/setGrabKeyboard() -- this only
+	 *  gates the modifier-combo shortcuts above. */
+	void setHotkeysEnabled(bool enabled)
+	{
+		_hotkeysEnabled = enabled;
+	}
+	[[nodiscard]] bool hotkeysEnabled() const
+	{
+		return _hotkeysEnabled;
+	}
+
   private:
 	[[nodiscard]] static std::list<std::string> tokenize(const std::string& data,
 	                                                     const std::string& delimiter = ",");

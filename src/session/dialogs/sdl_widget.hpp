@@ -67,6 +67,20 @@ class SdlWidget
 	[[nodiscard]] bool set_wrap(bool wrap = true, size_t width = 0);
 	[[nodiscard]] const SDL_FRect& rect() const;
 
+	/** Shifts the widget's rect in place -- no redraw, no cache
+	 *  invalidation. Cheap on purpose: for a widget being dragged every
+	 *  mouse-motion event (the floatbar row), rebuilding from scratch each
+	 *  time is the actual cost (see SdlFloatbar::handleMouseMotion()), not
+	 *  the eventual redraw at the new position, which happens once via the
+	 *  normal update()/render() path regardless.
+	 *
+	 *  Only safe to call on a widget with no *position-dependent* render
+	 *  cache -- update_text()'s _renderedDst is cached in absolute
+	 *  coordinates and won't follow the move until the text itself next
+	 *  changes. Fine for icon buttons (empty text, nothing cached there);
+	 *  a text widget would need that cache invalidated too. */
+	void moveBy(float dx, float dy);
+
 	[[nodiscard]] bool update();
 
 #define widget_log_error(res, what) SdlWidget::error_ex(res, what, __FILE__, __LINE__, __func__)

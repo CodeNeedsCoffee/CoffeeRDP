@@ -43,8 +43,11 @@ class SdlSelectableWidget : public SdlWidget
 	[[nodiscard]] bool updateInternal() override;
 	SDL_Color _highlightcolor = { 0xcd, 0xca, 0x35, 0x60 };
 	SDL_Color _mouseovercolor = { 0x66, 0xff, 0x66, 0x60 };
-
-  private:
+	/* Protected, not private: SdlButton reads these directly for icon
+	 * buttons, which skip updateInternal()'s flat opaque-rect fill() (see
+	 * sdl_button.cpp) in favor of a rounded, alpha-blended highlight that
+	 * fill()'s BLENDMODE_NONE painting can't produce without punching a
+	 * transparent hole through whatever was already drawn underneath. */
 	bool _mouseover = false;
 	bool _highlight = false;
 };

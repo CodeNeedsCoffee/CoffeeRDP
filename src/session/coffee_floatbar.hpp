@@ -49,6 +49,19 @@ class CoffeeFloatbarState
 	 *  Same recenter-or-reclamp behavior as setBarWidth(). */
 	void setWindowWidth(int windowWidthPx);
 
+	/** Keeps the bar fully shown regardless of pointer position, same as
+	 *  pinned/dragging -- but independent of both, so it doesn't affect
+	 *  pinned()'s value (which drives the pin icon/button and must reflect
+	 *  only what the user actually pinned). For the dropdown menu (Phase 6's
+	 *  redesign): the menu panel renders below the bar's own tracked rect, so
+	 *  a click travelling down into it would otherwise cross out of the
+	 *  reveal/stay-open zone and start retracting out from under the click --
+	 *  the same class of bug the "whole bar height counts as stay open"
+	 *  comment in tick() already describes for the bar's own buttons, just
+	 *  one level up. The menu owner is expected to set this while open and
+	 *  clear it on close. */
+	void setForceShown(bool force);
+
 	void setPinned(bool pinned);
 	[[nodiscard]] bool pinned() const
 	{
@@ -135,6 +148,7 @@ class CoffeeFloatbarState
 	int _offsetX = 0;
 	int _lastMotionY = 1'000'000; // "away" until the first real motion event
 	bool _pinned = false;
+	bool _forceShown = false;
 	bool _dragging = false;
 	int _dragGrabX = 0;
 	bool _userPositioned = false;

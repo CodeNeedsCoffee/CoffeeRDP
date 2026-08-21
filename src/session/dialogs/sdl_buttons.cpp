@@ -3,32 +3,85 @@
 
 #include "sdl_buttons.hpp"
 
-static const Uint32 hpadding = 10;
-
 SdlButtonList::~SdlButtonList() = default;
 
 bool SdlButtonList::populate(std::shared_ptr<SDL_Renderer>& renderer,
                              const std::vector<std::string>& labels, const std::vector<int>& ids,
                              Sint32 total_width, Sint32 offsetY, Sint32 width, Sint32 height)
 {
+	assert(labels.size() == ids.size());
+
+	std::vector<SdlButtonSpec> specs;
+	specs.reserve(ids.size());
+	for (size_t x = 0; x < ids.size(); x++)
+		specs.push_back({ labels.at(x), ids.at(x), SdlButtonIcon::None, false, 0 });
+
+	return populate(renderer, specs, total_width, offsetY, width, height);
+}
+
+bool SdlButtonList::populate(std::shared_ptr<SDL_Renderer>& renderer,
+                             const std::vector<SdlButtonSpec>& specs, Sint32 total_width,
+                             Sint32 offsetY, Sint32 width, Sint32 height, Sint32 hpadding)
+{
 	assert(renderer);
 	assert(width >= 0);
 	assert(height >= 0);
-	assert(labels.size() == ids.size());
 
 	_list.clear();
-	size_t button_width = ids.size() * (static_cast<size_t>(width) + hpadding) + hpadding;
-	size_t offsetX = static_cast<size_t>(total_width) -
-	                 std::min<size_t>(static_cast<size_t>(total_width), button_width);
-	for (size_t x = 0; x < ids.size(); x++)
+
+	Sint32 totalExtraGap = 0;
+	for (const auto& spec : specs)
+		totalExtraGap += spec.extraGapBefore;
+
+	/* Same shape as the original closed-form formula (button_width =
+	 * n*(width+hpadding)+hpadding), just with any group-break gaps folded
+	 * in -- reduces to exactly the original for extraGapBefore == 0
+	 * everywhere, which is every caller except the floatbar's icon row. */
+	const size_t button_width =
+	    specs.size() * (static_cast<size_t>(width) + hpadding) + hpadding + totalExtraGap;
+	const size_t offsetX = static_cast<size_t>(total_width) -
+	                       std::min<size_t>(static_cast<size_t>(total_width), button_width);
+
+	size_t cursor = offsetX;
+	for (const auto& spec : specs)
 	{
-		const size_t curOffsetX = offsetX + x * (static_cast<size_t>(width) + hpadding);
-		const SDL_FRect rect = { static_cast<float>(curOffsetX), static_cast<float>(offsetY),
+		cursor += static_cast<size_t>(spec.extraGapBefore);
+		const SDL_FRect rect = { static_cast<float>(cursor), static_cast<float>(offsetY),
 			                     static_cast<float>(width), static_cast<float>(height) };
-		auto button = std::make_shared<SdlButton>(renderer, labels.at(x), ids.at(x), rect);
+		auto button =
+		    std::make_shared<SdlButton>(renderer, spec.label, spec.id, rect, spec.icon, spec.toggledOn);
+		_list.emplace_back(button);
+		cursor += static_cast<size_t>(width) + hpadding;
+	}
+	return true;
+}
+
+bool SdlButtonList::populateVertical(std::shared_ptr<SDL_Renderer>& renderer,
+                                     const std::vector<SdlButtonSpec>& specs, Sint32 x,
+                                     Sint32 startY, Sint32 width, Sint32 rowHeight, Sint32 vpadding)
+{
+	assert(renderer);
+	assert(width >= 0);
+	assert(rowHeight >= 0);
+
+	_list.clear();
+	for (size_t i = 0; i < specs.size(); i++)
+	{
+		const auto& spec = specs.at(i);
+		const Sint32 y = startY + static_cast<Sint32>(i) * (rowHeight + vpadding);
+		const SDL_FRect rect = { static_cast<float>(x), static_cast<float>(y),
+			                     static_cast<float>(width), static_cast<float>(rowHeight) };
+		auto button =
+		    std::make_shared<SdlButton>(renderer, spec.label, spec.id, rect, spec.icon, spec.toggledOn);
 		_list.emplace_back(button);
 	}
 	return true;
+}
+
+void SdlButtonList::moveBy(float dx, float dy)
+{
+	for (auto& btn : _list)
+		btn->moveBy(dx, dy);
 }
 
 std::shared_ptr<SdlButton> SdlButtonList::get_selected(const SDL_MouseButtonEvent& button)

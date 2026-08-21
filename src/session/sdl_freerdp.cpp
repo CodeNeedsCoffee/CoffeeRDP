@@ -79,6 +79,7 @@
 #include "sdl_context.hpp"
 #include "coffee_quality.hpp"
 #include "coffee_idle.hpp"
+#include "coffee_rdp_file.hpp"
 #include "sdl_monitor.hpp"
 #include "sdl_pointer.hpp"
 #include "sdl_prefs.hpp"
@@ -927,6 +928,43 @@ int main(int argc, char* argv[])
 	    args.end());
 
 	sdl->configureIdleKeepAlive(idleSeconds, idleCombo);
+
+	/* /disable-shortcuts: same argv-stripping treatment as /quality: and the
+	 * /idle-keypress-*: flags above, and the same reasoning applies (a lone
+	 * unrecognized custom flag can trip FreeRDP's CLI-style auto-detector).
+	 * Also not `rdpSettings` -- sdlInput's own state, applied immediately,
+	 * same as configureIdleKeepAlive() above.
+	 *
+	 * Unlike quality/idle, this doesn't need to be pre-derived from
+	 * CoffeeProfileStore::sessionArgs() -- the manager always passes the
+	 * flag explicitly regardless of a linked .rdp file (see that function),
+	 * so scanning the file here only matters for a .rdp launched directly,
+	 * bypassing the manager entirely (same case /quality:'s and the idle
+	 * keys' own file-scan fallbacks exist for). */
+	bool disableShortcuts = false;
+	if (!rdpFilePath.empty())
+	{
+		if (auto v = coffee_rdp_file_scan_key(rdpFilePath, "disable shortcuts"))
+			disableShortcuts = (*v == "1");
+	}
+	args.erase(std::remove_if(args.begin(), args.end(),
+	                         [&](const char* a) {
+		                         if (!a)
+			                         return false;
+		                         for (const char* flag :
+		                              { "/disable-shortcuts", "+disable-shortcuts",
+		                                "-disable-shortcuts" })
+		                         {
+			                         if (strcmp(a, flag) == 0)
+			                         {
+				                         disableShortcuts = true;
+				                         return true;
+			                         }
+		                         }
+		                         return false;
+	                         }),
+	           args.end());
+	sdl->getInputChannelContext().setHotkeysEnabled(!disableShortcuts);
 
 	auto status = freerdp_client_settings_parse_command_line_ex(
 	    settings, WINPR_ASSERTING_INT_CAST(int, args.size()), args.data(), FALSE, sdl->args(),

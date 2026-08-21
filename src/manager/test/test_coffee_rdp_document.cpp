@@ -268,6 +268,40 @@ void check_aad_flag_round_trips()
 	expect(!readBack.aadAuth, "enablerdsaadauth:i:0 parses as off");
 }
 
+void check_disable_shortcuts_round_trips()
+{
+	// Off by default, and not invented for a file that never mentioned it.
+	CoffeeRdpDocument fresh;
+	CoffeeProfile p;
+	p.host = "h";
+	coffee_rdp_document_from_profile(p, fresh);
+	expect(!fresh.has("disable shortcuts"),
+	       "a non-disabling profile does not add 'disable shortcuts' to a file that lacked it");
+
+	p.disableShortcuts = true;
+	coffee_rdp_document_from_profile(p, fresh);
+	expect(fresh.getString("disable shortcuts").value_or("") == "1",
+	       "disabling shortcuts writes 'disable shortcuts:s:1'");
+
+	/* Same reasoning as the AAD flag: turning it off must write an explicit
+	 * 0, not just stop writing 1, or the file's stale 1 would silently keep
+	 * disabling shortcuts on the next launch. Type is `s`, not `i` -- this
+	 * is a CoffeeRDP-custom key the session reads via
+	 * coffee_rdp_file_scan_key(), which only matches type 's' lines. */
+	p.disableShortcuts = false;
+	coffee_rdp_document_from_profile(p, fresh);
+	expect(fresh.getString("disable shortcuts").value_or("") == "0",
+	       "re-enabling shortcuts writes an explicit 0 over the file's 1");
+
+	// A bare "0" in a file must read back as off, not merely "key present".
+	CoffeeRdpDocument disabled;
+	disabled.setString("disable shortcuts", "0");
+	CoffeeProfile readBack;
+	readBack.disableShortcuts = true;
+	coffee_rdp_document_to_profile(disabled, readBack);
+	expect(!readBack.disableShortcuts, "'disable shortcuts:s:0' parses as off");
+}
+
 void check_empty_values_remove_keys()
 {
 	CoffeeRdpDocument doc;
@@ -599,6 +633,7 @@ int main()
 	check_key_position_and_spelling_preserved();
 	check_port_handling();
 	check_aad_flag_round_trips();
+	check_disable_shortcuts_round_trips();
 	check_empty_values_remove_keys();
 	check_coffeerdp_keys_use_string_type();
 	check_keepalive_zero_is_written();

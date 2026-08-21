@@ -41,6 +41,14 @@ struct CoffeeProfile
 	 *  NLA instead -- the exact failure coffee_rdp_document.hpp warns about,
 	 *  arriving by a different route. */
 	bool aadAuth = false;
+	/** Disables the session's local Right-Shift+<key> shortcuts (minimize,
+	 *  toggle fullscreen, toggle resizeable, toggle keyboard/mouse grab,
+	 *  disconnect) for the duration of the session -- some remote apps or
+	 *  keyboard layouts collide with them. Defaults off (shortcuts enabled),
+	 *  matching the session's own out-of-the-box behavior when nothing
+	 *  overrides it. A dropdown toggle in the floatbar can still flip this
+	 *  mid-session; this field only controls the starting state. */
+	bool disableShortcuts = false;
 	/** One of the §2.4 preset names: speed|balanced|quality|best|auto.
 	 *  Empty means "don't pass /quality:, let the session default apply". */
 	std::string quality;

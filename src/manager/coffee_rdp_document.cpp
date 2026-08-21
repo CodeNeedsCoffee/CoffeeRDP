@@ -76,6 +76,12 @@ constexpr const char* kAllowDesktopComposition = "allow desktop composition";
 constexpr const char* kQuality = "quality";
 constexpr const char* kIdleTime = "idle keypress time";
 constexpr const char* kIdleCombo = "idle keypress combo";
+/* Must match the literal string sdl_freerdp.cpp scans for when a .rdp file
+ * is launched directly (not through the manager, which always passes
+ * /disable-shortcuts explicitly and so never depends on this key at
+ * session-launch time) -- no shared header between the two binaries for
+ * this one key, same as the three above. */
+constexpr const char* kDisableShortcuts = "disable shortcuts";
 
 constexpr int kScreenModeFullscreen = 2;
 constexpr int kScreenModeWindowed = 1;
@@ -449,6 +455,9 @@ void coffee_rdp_document_to_profile(const CoffeeRdpDocument& doc, CoffeeProfile&
 	}
 	if (const auto combo = doc.getString(kIdleCombo))
 		profile.idleKeepAliveCombo = *combo;
+
+	if (const auto shortcuts = doc.getString(kDisableShortcuts))
+		profile.disableShortcuts = (*shortcuts == "1");
 }
 
 void coffee_rdp_document_from_profile(const CoffeeProfile& profile, CoffeeRdpDocument& doc)
@@ -521,4 +530,13 @@ void coffee_rdp_document_from_profile(const CoffeeProfile& profile, CoffeeRdpDoc
 		doc.remove(kIdleCombo);
 	else
 		doc.setString(kIdleCombo, profile.idleKeepAliveCombo);
+
+	/* Written when on, or when the file already carried the key -- so
+	 * turning shortcuts back on writes an explicit "0" over a file's stale
+	 * "1" rather than leaving it to silently keep disabling them next
+	 * launch. Same reasoning as kEnableRdsAadAuth above; type `s`, not `i`,
+	 * for the same reason as kIdleTime -- this is a CoffeeRDP-custom key,
+	 * not one FreeRDP's own parser reads. */
+	if (profile.disableShortcuts || doc.has(kDisableShortcuts))
+		doc.setString(kDisableShortcuts, profile.disableShortcuts ? "1" : "0");
 }

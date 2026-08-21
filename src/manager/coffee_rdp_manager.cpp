@@ -235,6 +235,7 @@ struct EditDialog
 	GtkWidget* username = nullptr;
 	GtkWidget* domain = nullptr;
 	GtkWidget* aadAuth = nullptr;
+	GtkWidget* disableShortcuts = nullptr;
 	GtkWidget* quality = nullptr;
 	GtkWidget* multimon = nullptr;
 	GtkWidget* fullscreen = nullptr;
@@ -284,6 +285,7 @@ void populateFields(EditDialog* ed, const CoffeeProfile& p)
 	gtk_editable_set_text(GTK_EDITABLE(ed->username), p.username.c_str());
 	gtk_editable_set_text(GTK_EDITABLE(ed->domain), p.domain.c_str());
 	adw_switch_row_set_active(ADW_SWITCH_ROW(ed->aadAuth), p.aadAuth);
+	adw_switch_row_set_active(ADW_SWITCH_ROW(ed->disableShortcuts), p.disableShortcuts);
 	adw_combo_row_set_selected(ADW_COMBO_ROW(ed->quality),
 	                           static_cast<guint>(qualityIndex(p.quality)));
 	adw_switch_row_set_active(ADW_SWITCH_ROW(ed->multimon), p.multimon);
@@ -366,6 +368,7 @@ void onEditSave(GtkButton*, gpointer data)
 	p.username = entryText(ed->username);
 	p.domain = entryText(ed->domain);
 	p.aadAuth = adw_switch_row_get_active(ADW_SWITCH_ROW(ed->aadAuth));
+	p.disableShortcuts = adw_switch_row_get_active(ADW_SWITCH_ROW(ed->disableShortcuts));
 
 	const guint qsel = adw_combo_row_get_selected(ADW_COMBO_ROW(ed->quality));
 	p.quality = kQualityOptions[qsel] ? kQualityOptions[qsel] : "";
@@ -503,6 +506,11 @@ void presentEditDialog(AppState* st, const CoffeeProfile* existing,
 	ed->domain = addEntryRow(connGroup, "Domain", seed.domain);
 	ed->aadAuth = addSwitchRow(connGroup, "Entra ID sign-in",
 	                           "Azure AD authentication (enablerdsaadauth)", seed.aadAuth);
+	ed->disableShortcuts = addSwitchRow(
+	    connGroup, "Disable local shortcuts",
+	    "Right Shift + key combos (minimize, fullscreen, etc.) inside the session. Can still "
+	    "be re-enabled mid-session from the floatbar's dropdown.",
+	    seed.disableShortcuts);
 	adw_preferences_page_add(ADW_PREFERENCES_PAGE(page), ADW_PREFERENCES_GROUP(connGroup));
 
 	auto* displayGroup = adw_preferences_group_new();

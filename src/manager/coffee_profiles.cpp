@@ -223,6 +223,8 @@ bool CoffeeProfileStore::load(const std::string& path)
 			current.domain = value;
 		else if (key == "aad_auth")
 			current.aadAuth = parseBool(value, false);
+		else if (key == "disable_shortcuts")
+			current.disableShortcuts = parseBool(value, false);
 		else if (key == "quality")
 			current.quality = value;
 		else if (key == "multimon")
@@ -269,6 +271,7 @@ bool CoffeeProfileStore::save(const std::string& path) const
 			out << "username = " << p.username << "\n";
 			out << "domain = " << p.domain << "\n";
 			out << "aad_auth = " << boolToString(p.aadAuth) << "\n";
+			out << "disable_shortcuts = " << boolToString(p.disableShortcuts) << "\n";
 			out << "quality = " << p.quality << "\n";
 			out << "multimon = " << boolToString(p.multimon) << "\n";
 			out << "fullscreen = " << boolToString(p.fullscreen) << "\n";
@@ -424,6 +427,14 @@ std::vector<std::string> CoffeeProfileStore::sessionArgs(const CoffeeProfile& pr
 	args.push_back("/idle-keypress-time:" + std::to_string(profile.idleKeepAliveSeconds));
 	if (!trim(profile.idleKeepAliveCombo).empty())
 		args.push_back("/idle-keypress-combo:" + profile.idleKeepAliveCombo);
+
+	/* Presence-only, like /multimon -- there's no "explicitly re-enable"
+	 * form because the session's own out-of-the-box default is already
+	 * enabled, so omitting the flag already means that. A dropdown toggle
+	 * in the floatbar can still flip this mid-session (sdl_input.cpp); this
+	 * only sets where the session starts. */
+	if (profile.disableShortcuts)
+		args.push_back("/disable-shortcuts");
 
 	return args;
 }

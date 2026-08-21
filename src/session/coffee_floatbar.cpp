@@ -12,6 +12,7 @@ void CoffeeFloatbarState::configure(int barHeightPx, int barWidthPx, int windowW
 	_offsetY = -(_barHeightPx - _peekPx);
 	_lastMotionY = revealZonePx + 1;
 	_pinned = false;
+	_forceShown = false;
 	_dragging = false;
 	_userPositioned = false;
 
@@ -55,6 +56,11 @@ void CoffeeFloatbarState::setPinned(bool pinned)
 	_pinned = pinned;
 }
 
+void CoffeeFloatbarState::setForceShown(bool force)
+{
+	_forceShown = force;
+}
+
 void CoffeeFloatbarState::noteMouseY(int windowRelativeY)
 {
 	_lastMotionY = windowRelativeY;
@@ -90,7 +96,7 @@ bool CoffeeFloatbarState::tick()
 	const bool alreadyShown = _offsetY > hiddenY;
 	const int stayOpenZone = alreadyShown ? _barHeightPx : _revealZonePx;
 
-	if (_pinned || _dragging || (_lastMotionY <= stayOpenZone))
+	if (_pinned || _forceShown || _dragging || (_lastMotionY <= stayOpenZone))
 		_offsetY = std::min(0, _offsetY + _stepPx);
 	else
 		_offsetY = std::max(hiddenY, _offsetY - _stepPx);

@@ -54,6 +54,7 @@ CoffeeProfile sampleProfile()
 	p.domain = "crestwood";
 	p.quality = "balanced";
 	p.aadAuth = true;
+	p.disableShortcuts = true;
 	p.multimon = true;
 	p.fullscreen = true;
 	p.idleKeepAliveSeconds = 30;
@@ -160,6 +161,8 @@ void check_round_trip()
 		expect(back->domain == "crestwood", "domain round-trips");
 		expect(back->quality == "balanced", "quality round-trips");
 		expect(back->aadAuth, "aad_auth=true round-trips -- losing it drops the profile to NLA");
+		expect(back->disableShortcuts,
+		       "disable_shortcuts=true round-trips -- losing it silently re-enables shortcuts");
 		expect(back->multimon, "multimon=true round-trips");
 		expect(!back->fullscreen, "fullscreen=false round-trips (not silently defaulted to true)");
 		expect(back->idleKeepAliveSeconds == 0,
@@ -325,6 +328,23 @@ void check_session_args()
 	expect(!contains(CoffeeProfileStore::sessionArgs(p), "/sec:aad,tls,nla"),
 	       "no /sec: flag at all when Entra ID is off -- FreeRDP's own default applies");
 	p.aadAuth = true;
+
+	expect(contains(args, "/disable-shortcuts"),
+	       "disableShortcuts=true becomes /disable-shortcuts");
+	p.disableShortcuts = false;
+	expect(!contains(CoffeeProfileStore::sessionArgs(p), "/disable-shortcuts"),
+	       "no /disable-shortcuts flag when shortcuts are left enabled (the session's own "
+	       "out-of-the-box default)");
+	p.disableShortcuts = true;
+
+	// A .rdp-linked profile still gets it -- CoffeeRDP-specific flags apply
+	// on top of a linked file, same as quality/idle-keepalive.
+	{
+		auto linked = p;
+		linked.rdpFile = "/home/evan/Documents/cw-nbr-one-dev.rdp";
+		expect(contains(CoffeeProfileStore::sessionArgs(linked), "/disable-shortcuts"),
+		       "/disable-shortcuts is still passed when a .rdp file is linked");
+	}
 
 	// Non-default port.
 	p.port = 3390;
