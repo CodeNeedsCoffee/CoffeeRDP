@@ -8,9 +8,12 @@ before `dnf install` works.
 ## Install
 
 ```sh
-sudo dnf copr enable codeneedscoffee/coffeerdp
+sudo dnf copr enable codeneedscoffee/CoffeeRDP
 sudo dnf install coffeerdp
 ```
+
+Case matters on the first command: Copr project names aren't normalized, and
+`codeneedscoffee/coffeerdp` (all lowercase) 404s.
 
 The first command adds the repository; the second installs `coffeerdp`
 (the connection manager, with the desktop launcher) along with
@@ -38,7 +41,7 @@ Once the Copr repo is enabled, `coffeerdp` updates through your normal
 
 ```sh
 sudo dnf remove coffeerdp
-sudo dnf copr disable codeneedscoffee/coffeerdp
+sudo dnf copr disable codeneedscoffee/CoffeeRDP
 ```
 
 The second command is only needed if you also want to stop tracking the

@@ -51,7 +51,7 @@ jobs:
       - name: Build SRPM (same command Copr's SCM builder runs)
         run: make -f .copr/Makefile srpm outdir="$PWD/srpm-out" spec=packaging/coffeerdp.spec
 
-      - name: Rebuild binary RPM (runs %check: ctest, desktop-file-validate, appstreamcli validate)
+      - name: "Rebuild binary RPM (runs %check: ctest, desktop-file-validate, appstreamcli validate)"
         run: rpmbuild --define "_topdir $PWD/rpmbuild" --rebuild srpm-out/*.src.rpm
 
       - name: Upload built RPMs

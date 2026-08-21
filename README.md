@@ -39,7 +39,7 @@ come up start to finish.
 Packaged for Fedora via [Copr](https://copr.fedorainfracloud.org/):
 
 ```sh
-sudo dnf copr enable codeneedscoffee/coffeerdp
+sudo dnf copr enable codeneedscoffee/CoffeeRDP
 sudo dnf install coffeerdp
 ```
 
