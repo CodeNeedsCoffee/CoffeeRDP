@@ -363,8 +363,7 @@ void onEditSave(GtkButton*, gpointer data)
 
 	p.name = entryText(ed->name);
 	p.host = entryText(ed->host);
-	p.port = static_cast<unsigned>(
-	    gtk_spin_button_get_value_as_int(GTK_SPIN_BUTTON(ed->port)));
+	p.port = static_cast<unsigned>(adw_spin_row_get_value(ADW_SPIN_ROW(ed->port)));
 	p.username = entryText(ed->username);
 	p.domain = entryText(ed->domain);
 	p.aadAuth = adw_switch_row_get_active(ADW_SWITCH_ROW(ed->aadAuth));
@@ -375,8 +374,7 @@ void onEditSave(GtkButton*, gpointer data)
 
 	p.multimon = adw_switch_row_get_active(ADW_SWITCH_ROW(ed->multimon));
 	p.fullscreen = adw_switch_row_get_active(ADW_SWITCH_ROW(ed->fullscreen));
-	p.idleKeepAliveSeconds = static_cast<unsigned>(
-	    gtk_spin_button_get_value_as_int(GTK_SPIN_BUTTON(ed->idleTime)));
+	p.idleKeepAliveSeconds = static_cast<unsigned>(adw_spin_row_get_value(ADW_SPIN_ROW(ed->idleTime)));
 	p.idleKeepAliveCombo = entryText(ed->idleCombo);
 	p.rdpFile = entryText(ed->rdpFile);
 
