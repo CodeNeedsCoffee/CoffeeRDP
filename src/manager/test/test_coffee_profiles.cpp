@@ -53,6 +53,7 @@ CoffeeProfile sampleProfile()
 	p.username = "etemplin";
 	p.domain = "crestwood";
 	p.quality = "balanced";
+	p.aadAuth = true;
 	p.multimon = true;
 	p.fullscreen = true;
 	p.idleKeepAliveSeconds = 30;
@@ -158,6 +159,7 @@ void check_round_trip()
 		expect(back->username == "etemplin", "username round-trips");
 		expect(back->domain == "crestwood", "domain round-trips");
 		expect(back->quality == "balanced", "quality round-trips");
+		expect(back->aadAuth, "aad_auth=true round-trips -- losing it drops the profile to NLA");
 		expect(back->multimon, "multimon=true round-trips");
 		expect(!back->fullscreen, "fullscreen=false round-trips (not silently defaulted to true)");
 		expect(back->idleKeepAliveSeconds == 0,
@@ -313,6 +315,16 @@ void check_session_args()
 	expect(contains(args, "/quality:balanced"), "quality becomes /quality:");
 	expect(contains(args, "/idle-keypress-time:30"), "idle time becomes /idle-keypress-time:");
 	expect(contains(args, "/idle-keypress-combo:alt+tab"), "combo becomes /idle-keypress-combo:");
+
+	/* The reason this field exists: an imported AAD profile that doesn't emit
+	 * /sec: gets FreeRDP's default negotiation, which starts at NLA and never
+	 * offers Entra sign-in at all. */
+	expect(contains(args, "/sec:aad,tls,nla"), "Entra ID becomes /sec:aad, with fallbacks named");
+
+	p.aadAuth = false;
+	expect(!contains(CoffeeProfileStore::sessionArgs(p), "/sec:aad,tls,nla"),
+	       "no /sec: flag at all when Entra ID is off -- FreeRDP's own default applies");
+	p.aadAuth = true;
 
 	// Non-default port.
 	p.port = 3390;

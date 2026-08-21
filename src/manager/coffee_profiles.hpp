@@ -33,6 +33,14 @@ struct CoffeeProfile
 	unsigned port = 3389;
 	std::string username;
 	std::string domain;
+	/** Entra ID (Azure AD) authentication -- the `enablerdsaadauth:i:1` key in
+	 *  a .rdp file, which is the whole reason the AAD helper (Phase 4) exists.
+	 *  Modeled explicitly rather than left to the linked file: an imported
+	 *  profile is unlinked by default, so without a field to carry it the flag
+	 *  would be dropped on import and the session would silently negotiate
+	 *  NLA instead -- the exact failure coffee_rdp_document.hpp warns about,
+	 *  arriving by a different route. */
+	bool aadAuth = false;
 	/** One of the §2.4 preset names: speed|balanced|quality|best|auto.
 	 *  Empty means "don't pass /quality:, let the session default apply". */
 	std::string quality;

@@ -669,7 +669,25 @@ bool sdlInput::mouse_focus(Uint32 windowID)
 		if (!window)
 			return false;
 
-		window->raise();
+		/* Only raise while the session already holds keyboard focus -- i.e.
+		 * the pointer is crossing between *our own* windows, which is the
+		 * case this exists for (multimon: the window the mouse is over should
+		 * come forward).
+		 *
+		 * When focus is elsewhere, this is a background app demanding focus,
+		 * and it fails in the noisiest way available: Wayland refuses an
+		 * activation request that carries no token, and GNOME reports the
+		 * refusal as a `"FreeRDP: <host>" is ready` notification. With a
+		 * fullscreen session on a second monitor, every pointer excursion
+		 * onto that monitor while working elsewhere posts another one. The
+		 * raise never actually happened in that case either way, so skipping
+		 * it costs nothing and stops the stream of notifications.
+		 *
+		 * SDL_GetKeyboardFocus() is per-application: non-null means one of
+		 * this process's windows has focus, so a token can be minted from our
+		 * own input serial and the compositor honors the raise. */
+		if (SDL_GetKeyboardFocus() != nullptr)
+			window->raise();
 	}
 	return true;
 }

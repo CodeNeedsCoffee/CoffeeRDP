@@ -221,6 +221,8 @@ bool CoffeeProfileStore::load(const std::string& path)
 			current.username = value;
 		else if (key == "domain")
 			current.domain = value;
+		else if (key == "aad_auth")
+			current.aadAuth = parseBool(value, false);
 		else if (key == "quality")
 			current.quality = value;
 		else if (key == "multimon")
@@ -266,6 +268,7 @@ bool CoffeeProfileStore::save(const std::string& path) const
 			out << "port = " << p.port << "\n";
 			out << "username = " << p.username << "\n";
 			out << "domain = " << p.domain << "\n";
+			out << "aad_auth = " << boolToString(p.aadAuth) << "\n";
 			out << "quality = " << p.quality << "\n";
 			out << "multimon = " << boolToString(p.multimon) << "\n";
 			out << "fullscreen = " << boolToString(p.fullscreen) << "\n";
@@ -388,6 +391,24 @@ std::vector<std::string> CoffeeProfileStore::sessionArgs(const CoffeeProfile& pr
 			args.push_back("/u:" + profile.username);
 		if (!trim(profile.domain).empty())
 			args.push_back("/d:" + profile.domain);
+
+		/* Entra ID: the CLI equivalent of `enablerdsaadauth:i:1`. FreeRDP's
+		 * nego starts at NEGO_STATE_AAD whenever AadSecurity is set, so this
+		 * is what makes the session request PROTOCOL_RDSAAD (and pop the
+		 * coffee-rdp-auth login) instead of going straight to NLA.
+		 *
+		 * The list form is deliberate, and the comma matters. A bare
+		 * `/sec:aad` is parsed by FreeRDP as "this protocol *only*" and turns
+		 * tls/nla/rdp off (cmdline.c, the singleOptionWithoutOnOff branch),
+		 * which is stricter than what the .rdp key means -- file.c sets
+		 * AadSecurity and leaves the rest at their defaults. Naming the
+		 * fallbacks keeps the two paths behaving identically: AAD is tried
+		 * first, and a server that rejects RDSAAD still falls back rather than
+		 * failing outright. `/sec:aad:on` is not an option -- FreeRDP matches
+		 * "aad" with option_equals(), not option_starts_with(), so the :on
+		 * suffix is rejected as an unknown protocol. */
+		if (profile.aadAuth)
+			args.push_back("/sec:aad,tls,nla");
 		if (profile.multimon)
 			args.push_back("/multimon");
 		else if (profile.fullscreen)

@@ -150,21 +150,72 @@ void connectToProfile(AppState* st, const CoffeeProfile& profile)
 		argv.push_back(const_cast<char*>(a.c_str()));
 	argv.push_back(nullptr);
 
+	/* Hand the session a startup/activation token so the compositor lets its
+	 * window take focus from us. Without one, the session window is just
+	 * "some background process mapped a window": Wayland refuses the
+	 * activation outright, and GNOME turns the refusal into a persistent
+	 * `"FreeRDP: <host>" is ready` notification instead of focusing it. The
+	 * token is the whole difference between "launched by the user" and
+	 * "popped up on its own" as far as Mutter is concerned.
+	 *
+	 * GAppInfo is what the token gets attributed to; GIO reads its name out
+	 * of there for the startup sequence, and warns if it's NULL. */
+	GdkAppLaunchContext* launchCtx = nullptr;
+	std::string token;
+	if (GdkDisplay* display = gtk_widget_get_display(GTK_WIDGET(st->window)))
+	{
+		launchCtx = gdk_display_get_app_launch_context(display);
+		GAppInfo* info = g_app_info_create_from_commandline(
+		    binary.c_str(), "CoffeeRDP session", G_APP_INFO_CREATE_NONE, nullptr);
+		if (gchar* id = g_app_launch_context_get_startup_notify_id(G_APP_LAUNCH_CONTEXT(launchCtx),
+		                                                           info, nullptr))
+		{
+			token = id;
+			g_free(id);
+		}
+		if (info)
+			g_object_unref(info);
+	}
+
+	/* Both names, because which one is read depends on the backend the
+	 * session ends up on: XDG_ACTIVATION_TOKEN is what SDL's Wayland driver
+	 * looks for, DESKTOP_STARTUP_ID is the X11 equivalent (--display-backend:x11
+	 * is still a supported escape hatch, see sdl_freerdp.cpp). */
+	gchar** envp = g_get_environ();
+	if (!token.empty())
+	{
+		envp = g_environ_setenv(envp, "XDG_ACTIVATION_TOKEN", token.c_str(), TRUE);
+		envp = g_environ_setenv(envp, "DESKTOP_STARTUP_ID", token.c_str(), TRUE);
+	}
+
 	GError* error = nullptr;
 	/* DO_NOT_REAP_CHILD is deliberately absent: we never wait on the
 	 * session, so letting GLib reap it avoids leaving zombies behind for
 	 * as long as the manager stays open. */
-	const gboolean ok = g_spawn_async(nullptr, argv.data(), nullptr,
+	const gboolean ok = g_spawn_async(nullptr, argv.data(), envp,
 	                                  static_cast<GSpawnFlags>(G_SPAWN_SEARCH_PATH), nullptr,
 	                                  nullptr, nullptr, &error);
+	g_strfreev(envp);
+
 	if (!ok)
 	{
+		/* Tell the compositor the sequence it was told to expect is never
+		 * arriving -- otherwise X11 keeps showing a launch spinner until the
+		 * startup sequence times out on its own. */
+		if (launchCtx && !token.empty())
+			g_app_launch_context_launch_failed(G_APP_LAUNCH_CONTEXT(launchCtx), token.c_str());
+		if (launchCtx)
+			g_object_unref(launchCtx);
+
 		const std::string msg = error && error->message ? error->message : "unknown error";
 		showError(st, "Could not launch the session:\n" + msg);
 		if (error)
 			g_error_free(error);
 		return;
 	}
+
+	if (launchCtx)
+		g_object_unref(launchCtx);
 
 	showToast(st, "Connecting to " + profile.name + "…");
 }
@@ -183,6 +234,7 @@ struct EditDialog
 	GtkWidget* port = nullptr;
 	GtkWidget* username = nullptr;
 	GtkWidget* domain = nullptr;
+	GtkWidget* aadAuth = nullptr;
 	GtkWidget* quality = nullptr;
 	GtkWidget* multimon = nullptr;
 	GtkWidget* fullscreen = nullptr;
@@ -231,6 +283,7 @@ void populateFields(EditDialog* ed, const CoffeeProfile& p)
 	adw_spin_row_set_value(ADW_SPIN_ROW(ed->port), p.port);
 	gtk_editable_set_text(GTK_EDITABLE(ed->username), p.username.c_str());
 	gtk_editable_set_text(GTK_EDITABLE(ed->domain), p.domain.c_str());
+	adw_switch_row_set_active(ADW_SWITCH_ROW(ed->aadAuth), p.aadAuth);
 	adw_combo_row_set_selected(ADW_COMBO_ROW(ed->quality),
 	                           static_cast<guint>(qualityIndex(p.quality)));
 	adw_switch_row_set_active(ADW_SWITCH_ROW(ed->multimon), p.multimon);
@@ -312,6 +365,7 @@ void onEditSave(GtkButton*, gpointer data)
 	    gtk_spin_button_get_value_as_int(GTK_SPIN_BUTTON(ed->port)));
 	p.username = entryText(ed->username);
 	p.domain = entryText(ed->domain);
+	p.aadAuth = adw_switch_row_get_active(ADW_SWITCH_ROW(ed->aadAuth));
 
 	const guint qsel = adw_combo_row_get_selected(ADW_COMBO_ROW(ed->quality));
 	p.quality = kQualityOptions[qsel] ? kQualityOptions[qsel] : "";
@@ -447,6 +501,8 @@ void presentEditDialog(AppState* st, const CoffeeProfile* existing,
 	ed->port = addSpinRow(connGroup, "Port", nullptr, seed.port, 1, 65535);
 	ed->username = addEntryRow(connGroup, "Username", seed.username);
 	ed->domain = addEntryRow(connGroup, "Domain", seed.domain);
+	ed->aadAuth = addSwitchRow(connGroup, "Entra ID sign-in",
+	                           "Azure AD authentication (enablerdsaadauth)", seed.aadAuth);
 	adw_preferences_page_add(ADW_PREFERENCES_PAGE(page), ADW_PREFERENCES_GROUP(connGroup));
 
 	auto* displayGroup = adw_preferences_group_new();
@@ -738,10 +794,15 @@ bool userDismissedDialog(GError* error)
 }
 
 /** Import, whether from the toolbar button or a drop: loads a .rdp and
- *  returns a standalone (unlinked -- rdpFile left empty) profile seeded from
- *  it, with a name derived from the filename and de-duplicated against the
+ *  returns a profile seeded from it and linked back to the file it came
+ *  from, with a name derived from the filename and de-duplicated against the
  *  store. Doesn't touch the store itself; callers decide whether to present
- *  it for review or commit it directly. */
+ *  it for review or commit it directly.
+ *
+ *  The link is the point of an import: the file stays the source of truth, so
+ *  editing the profile writes changes back to it, and keys CoffeeRDP doesn't
+ *  model (gateway settings, redirection flags) keep applying instead of being
+ *  silently left behind at the moment of import. */
 bool loadRdpAsProfile(AppState* st, const std::string& path, CoffeeProfile& out,
                       std::string& error)
 {
@@ -753,6 +814,7 @@ bool loadRdpAsProfile(AppState* st, const std::string& path, CoffeeProfile& out,
 	}
 	coffee_rdp_document_to_profile(doc, out);
 	out.name = suggestProfileName(st, baseNameWithoutExt(path));
+	out.rdpFile = path;
 	return true;
 }
 
@@ -786,9 +848,10 @@ void onImportFileChosen(GObject* source, GAsyncResult* res, gpointer data)
 
 	/* Review, not a direct add: an explicit "Import…" click is a deliberate
 	 * single-file action, so it gets the same review-before-commit treatment
-	 * as "New Profile" -- the user can rename it or tweak a field before
-	 * anything is written. Contrast with the drag-and-drop path below, which
-	 * is meant for quick bulk import and commits directly. */
+	 * as "New Profile" -- the user can rename it, tweak a field, or clear the
+	 * link to the file before anything is written. Contrast with the
+	 * drag-and-drop path below, which is meant for quick bulk import and
+	 * commits directly. */
 	presentEditDialog(st, nullptr, &seed);
 }
 
@@ -869,7 +932,12 @@ void onExportClicked(GtkButton*, gpointer data)
  *  directly and saved, no review dialog -- deliberately different from the
  *  toolbar Import button. A drop is inherently a multi-file gesture (a
  *  file manager selection), and prompting once per file would be tedious;
- *  a mis-imported profile is one click to fix via Edit or Delete. */
+ *  a mis-imported profile is one click to fix via Edit or Delete.
+ *
+ *  Each profile stays linked to the file it was dropped from (see
+ *  loadRdpAsProfile) -- the "Linked .rdp file" path in Edit is filled in,
+ *  and the file keeps driving the connection. Unlinking is a matter of
+ *  clearing that field. */
 gboolean onWindowDrop(GtkDropTarget*, const GValue* value, double, double, gpointer data)
 {
 	auto* st = static_cast<AppState*>(data);

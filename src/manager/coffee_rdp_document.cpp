@@ -31,6 +31,11 @@ constexpr const char* kUsername = "username";
 constexpr const char* kDomain = "domain";
 constexpr const char* kUseMultimon = "use multimon";
 constexpr const char* kScreenModeId = "screen mode id";
+/* The AAD/Entra flag. Preserved verbatim for an *unmodeled* key by this
+ * file's line-retention alone, but that only helps a profile linked to the
+ * file -- an imported profile is unlinked, so the flag has to be modeled to
+ * survive the trip into CoffeeProfile and back out as /sec:aad. */
+constexpr const char* kEnableRdsAadAuth = "enablerdsaadauth";
 
 /* Standard performance / bandwidth keys, also FreeRDP's and mstsc's. These
  * are what make a CoffeeRDP-written file behave correctly in *other*
@@ -412,6 +417,9 @@ void coffee_rdp_document_to_profile(const CoffeeRdpDocument& doc, CoffeeProfile&
 	if (const auto domain = doc.getString(kDomain))
 		profile.domain = *domain;
 
+	if (const auto aad = doc.getInt(kEnableRdsAadAuth))
+		profile.aadAuth = (*aad != 0);
+
 	if (const auto multimon = doc.getInt(kUseMultimon))
 		profile.multimon = (*multimon != 0);
 	if (const auto mode = doc.getInt(kScreenModeId))
@@ -466,6 +474,14 @@ void coffee_rdp_document_from_profile(const CoffeeProfile& profile, CoffeeRdpDoc
 		doc.remove(kDomain);
 	else
 		doc.setString(kDomain, profile.domain);
+
+	/* Written when on, or when the file already carried the key -- so turning
+	 * the switch off writes an explicit `:i:0` into a file that had `:i:1`
+	 * (leaving the 1 there would let the file silently re-enable what the user
+	 * just disabled), while a file that never mentioned AAD doesn't gain a
+	 * key it doesn't need. Same reasoning as `server port` above. */
+	if (profile.aadAuth || doc.has(kEnableRdsAadAuth))
+		doc.setInt(kEnableRdsAadAuth, profile.aadAuth ? 1 : 0);
 
 	doc.setInt(kUseMultimon, profile.multimon ? 1 : 0);
 	doc.setInt(kScreenModeId, profile.fullscreen ? kScreenModeFullscreen : kScreenModeWindowed);

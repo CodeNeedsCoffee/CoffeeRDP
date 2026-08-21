@@ -99,6 +99,9 @@ void check_parse_real_file()
 	expect(p.username == "etemplin@crestwood.com", "username parsed");
 	expect(p.multimon, "'use multimon:i:1' parsed as true");
 	expect(p.fullscreen, "'screen mode id:i:2' parsed as fullscreen");
+	expect(p.aadAuth, "'enablerdsaadauth:i:1' reaches the profile -- an imported profile is "
+	                  "unlinked from the file, so this flag is the only thing that makes the "
+	                  "session ask for Entra sign-in instead of NLA");
 
 	std::remove(path.c_str());
 	rmdir(dir.c_str());
@@ -231,6 +234,38 @@ void check_port_handling()
 	coffee_rdp_document_from_profile(p3, had);
 	expect(had.getInt("server port").value_or(-1) == 3389,
 	       "an existing 'server port' key is updated, not left stale");
+}
+
+void check_aad_flag_round_trips()
+{
+	// Off by default, and not invented for a file that never mentioned it.
+	CoffeeRdpDocument fresh;
+	CoffeeProfile p;
+	p.host = "h";
+	coffee_rdp_document_from_profile(p, fresh);
+	expect(!fresh.has("enablerdsaadauth"),
+	       "a non-AAD profile does not add enablerdsaadauth to a file that lacked it");
+
+	p.aadAuth = true;
+	coffee_rdp_document_from_profile(p, fresh);
+	expect(fresh.getInt("enablerdsaadauth").value_or(-1) == 1,
+	       "turning Entra ID on writes enablerdsaadauth:i:1");
+
+	/* Turning it off must write an explicit 0, not just stop writing 1:
+	 * leaving the file's old `:i:1` in place would let the file re-enable AAD
+	 * behind the user's back on the next launch. */
+	p.aadAuth = false;
+	coffee_rdp_document_from_profile(p, fresh);
+	expect(fresh.getInt("enablerdsaadauth").value_or(-1) == 0,
+	       "turning Entra ID off writes an explicit 0 over the file's 1");
+
+	// `:i:0` in a file must read back as off, not merely "key present".
+	CoffeeRdpDocument disabled;
+	disabled.setInt("enablerdsaadauth", 0);
+	CoffeeProfile readBack;
+	readBack.aadAuth = true;
+	coffee_rdp_document_to_profile(disabled, readBack);
+	expect(!readBack.aadAuth, "enablerdsaadauth:i:0 parses as off");
 }
 
 void check_empty_values_remove_keys()
@@ -563,6 +598,7 @@ int main()
 	check_comments_and_blanks_preserved();
 	check_key_position_and_spelling_preserved();
 	check_port_handling();
+	check_aad_flag_round_trips();
 	check_empty_values_remove_keys();
 	check_coffeerdp_keys_use_string_type();
 	check_keepalive_zero_is_written();
