@@ -1,9 +1,11 @@
 [Desktop Entry]
 Type=Application
 Name=CoffeeRDP
+GenericName=Remote Desktop Client
 Comment=Connect to RDP sessions with durable Entra ID login
 Exec=coffeerdp
 Icon=com.codeneedscoffee.coffeerdp.manager
 Terminal=false
 Categories=Network;RemoteAccess;
+Keywords=RDP;Remote Desktop;Remmina;mstsc;Entra;Azure AD;FreeRDP;
 StartupNotify=true

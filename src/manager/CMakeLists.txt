@@ -36,6 +36,15 @@ install(TARGETS ${MODULE_NAME} DESTINATION ${CMAKE_INSTALL_PREFIX}/bin)
 install(FILES data/com.codeneedscoffee.coffeerdp.manager.desktop
        DESTINATION ${CMAKE_INSTALL_PREFIX}/share/applications)
 
+# AppStream metadata -- what GNOME Software (and any other AppStream-reading
+# software center) actually reads to list the app, show its description, and
+# render it as more than a bare launcher entry. id must match the desktop
+# file's own filename (including ".desktop"), which is what ties the two
+# together -- see the metainfo file's own <launchable> for the same pairing
+# from the other direction.
+install(FILES data/com.codeneedscoffee.coffeerdp.manager.metainfo.xml
+       DESTINATION ${CMAKE_INSTALL_PREFIX}/share/metainfo)
+
 set(COFFEERDP_ICON_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../resources/icon)
 foreach(_size 16 24 32 48 64 128 256)
    install(FILES ${COFFEERDP_ICON_SOURCE_DIR}/hicolor/${_size}x${_size}/apps/com.codeneedscoffee.coffeerdp.manager.png

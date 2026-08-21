@@ -1,0 +1,64 @@
+name: Packaging
+
+# Builds the RPM the same way Copr's "make srpm" SCM method will (see
+# .copr/Makefile): SRPM from `git archive`, then a full rebuild, which also
+# runs coffeerdp.spec's %check (ctest, desktop-file-validate, appstreamcli
+# validate). No Copr credentials involved -- this only proves the package
+# still builds and passes its own checks on every push, it doesn't publish
+# anything. Publishing to Copr itself is a webhook Copr triggers on push,
+# configured on Copr's side -- see PACKAGING.md.
+on:
+  push:
+    branches: [master]
+    paths:
+      - "src/**"
+      - "resources/**"
+      - "CMakeLists.txt"
+      - "packaging/**"
+      - ".copr/**"
+      - ".github/workflows/packaging.yml"
+  pull_request:
+    paths:
+      - "src/**"
+      - "resources/**"
+      - "CMakeLists.txt"
+      - "packaging/**"
+      - ".copr/**"
+      - ".github/workflows/packaging.yml"
+  workflow_dispatch:
+
+jobs:
+  rpm-build:
+    runs-on: ubuntu-latest
+    container: fedora:latest
+    steps:
+      - name: Install git (needed before checkout can run on a bare container)
+        run: dnf -y install git
+
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # .copr/Makefile's `git archive HEAD` needs real history, not a shallow clone
+
+      - name: Install RPM build tooling
+        run: dnf -y install rpm-build rpmdevtools dnf-plugins-core
+
+      - name: Install coffeerdp.spec's BuildRequires
+        run: dnf -y builddep packaging/coffeerdp.spec
+
+      - name: Mark workspace safe for git (container runs as root, checkout owns files as the runner user)
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Build SRPM (same command Copr's SCM builder runs)
+        run: make -f .copr/Makefile srpm outdir="$PWD/srpm-out" spec=packaging/coffeerdp.spec
+
+      - name: Rebuild binary RPM (runs %check: ctest, desktop-file-validate, appstreamcli validate)
+        run: rpmbuild --define "_topdir $PWD/rpmbuild" --rebuild srpm-out/*.src.rpm
+
+      - name: Upload built RPMs
+        uses: actions/upload-artifact@v4
+        with:
+          name: coffeerdp-rpms
+          path: |
+            srpm-out/*.src.rpm
+            rpmbuild/RPMS/**/*.rpm
+          if-no-files-found: error

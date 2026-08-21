@@ -1,5 +1,8 @@
 cmake_minimum_required(VERSION 3.19)
-project(CoffeeRDP LANGUAGES C CXX)
+# Bump alongside packaging/coffeerdp.spec's Version: and any git tag used to
+# cut a release -- the three aren't wired together automatically, see
+# PACKAGING.md's release checklist.
+project(CoffeeRDP VERSION 0.1.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)

@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Copyright 2026 CodeNeedsCoffee -->
+<component type="desktop-application">
+  <id>com.codeneedscoffee.coffeerdp.manager.desktop</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>Apache-2.0</project_license>
+  <name>CoffeeRDP</name>
+  <summary>Connect to RDP sessions with durable Entra ID login</summary>
+  <description>
+    <p>
+      CoffeeRDP is a minimal RDP client for Linux, built on FreeRDP's SDL3
+      client with a GTK4 connection manager on top.
+    </p>
+    <p>Features:</p>
+    <ul>
+      <li>Wayland-first, with an automatic X11 fallback when Wayland can't deliver</li>
+      <li>Persistent Entra ID (Azure AD) login instead of a full MFA challenge every connection</li>
+      <li>An idle keep-alive so sessions don't disconnect while you're away</li>
+      <li>An in-session control bar for disconnect, fullscreen, keyboard capture, and connection quality</li>
+      <li>Selectable connection quality presets</li>
+      <li>A connection manager with saved profiles and in-place .rdp file editing</li>
+    </ul>
+  </description>
+  <launchable type="desktop-id">com.codeneedscoffee.coffeerdp.manager.desktop</launchable>
+  <url type="homepage">https://github.com/CodeNeedsCoffee/CoffeeRDP</url>
+  <url type="bugtracker">https://github.com/CodeNeedsCoffee/CoffeeRDP/issues</url>
+  <url type="vcs-browser">https://github.com/CodeNeedsCoffee/CoffeeRDP</url>
+  <developer id="com.codeneedscoffee">
+    <name>CodeNeedsCoffee</name>
+  </developer>
+  <provides>
+    <binary>coffeerdp</binary>
+  </provides>
+  <content_rating type="oars-1.1" />
+  <releases>
+    <release version="0.1.0" date="2026-08-21">
+      <description>
+        <p>First packaged release: session client, quality presets, idle keep-alive, the in-session floatbar, persistent Entra ID login, and the GTK4 connection manager.</p>
+      </description>
+    </release>
+  </releases>
+</component>
