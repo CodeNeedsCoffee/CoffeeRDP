@@ -3,6 +3,10 @@ set(MODULE_NAME "coffeerdp")
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(GTK4 REQUIRED IMPORTED_TARGET gtk4)
 pkg_check_modules(ADWAITA REQUIRED IMPORTED_TARGET libadwaita-1)
+pkg_check_modules(GIO REQUIRED IMPORTED_TARGET gio-2.0 gio-unix-2.0)
+# Owns the resident coffee-rdp-auth --serve helper (GSubprocess, GDBus) and
+# the XDG Background portal request on window close (PLAN.md Phase 7.5).
+pkg_check_modules(LIBPORTAL REQUIRED IMPORTED_TARGET libportal-gtk4)
 # Headers only -- coffee-rdp-document uses FreeRDP's CONNECTION_TYPE_*
 # constants so they can't drift from the library we build against.
 find_package(FreeRDP 3 REQUIRED)
@@ -24,7 +28,8 @@ add_subdirectory(test)
 
 add_executable(${MODULE_NAME} coffee_rdp_manager.cpp)
 target_link_libraries(${MODULE_NAME} PRIVATE coffee-profiles coffee-rdp-document PkgConfig::GTK4
-                                            PkgConfig::ADWAITA)
+                                            PkgConfig::ADWAITA PkgConfig::GIO PkgConfig::LIBPORTAL
+                                            coffee-auth-ipc)
 
 install(TARGETS ${MODULE_NAME} DESTINATION ${CMAKE_INSTALL_PREFIX}/bin)
 

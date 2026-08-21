@@ -1,15 +1,24 @@
 /**
- * CoffeeRDP: AAD login popup, spawned as a separate process
+ * CoffeeRDP: AAD login popup, either via a resident helper or spawned fresh
  *
  * This used to run akallabeth/webview in-process (GTK3, via CMake
  * FetchContent). Replaced per PLAN.md section 4: GTK3 and GTK4 can't share a
  * process, and a WebKit crash here used to take the whole RDP session down
  * with it. coffee-rdp-auth (GTK4 + webkitgtk6.0, its own binary, built
  * alongside this one) now does the actual login UI and persistent cookie
- * jar; this file just spawns it and reads the authorization code back over
- * a pipe. Same public interface (webview_impl_run()) as before, so
+ * jar. Same public interface (webview_impl_run()) as before, so
  * sdl_webview.cpp -- which already correctly builds the AAD/AVD URLs via
  * FreeRDP's own freerdp_client_get_aad_url() -- needed no changes at all.
+ *
+ * PLAN.md Phase 7.5 added a second path: if coffeerdp (the connection
+ * manager) has a resident `coffee-rdp-auth --serve` running, this talks to
+ * it over a private peer-to-peer GDBus connection instead of spawning a
+ * fresh process, so a reconnect while coffeerdp is open reuses the same
+ * long-lived WebView rather than restarting WebKit from scratch. If no
+ * resident helper is reachable (no manager running -- the standalone
+ * `coffee-rdp-session` CLI path this whole project has been verified
+ * against since Phase 4), this falls straight back to the original
+ * fork/exec one-shot path, unchanged.
  */
 
 #include "webview_impl.hpp"
@@ -21,12 +30,76 @@
 #include <unistd.h>
 #include <sys/wait.h>
 
+#include <gio/gio.h>
+#include <coffee-rdp-auth-generated.h>
+#include <coffee_auth_ipc.hpp>
+
 #include <freerdp/log.h>
 
 #define TAG FREERDP_TAG("client.session.aad")
 
 namespace
 {
+
+/** Tries the resident coffee-rdp-auth --serve helper over its private P2P
+ *  GDBus socket. Returns false only when no such helper is reachable at
+ *  all (no socket, connection refused): the caller should then fall back
+ *  to spawning a fresh one-shot process. If the connection succeeds but
+ *  the login itself fails/is cancelled, that's a real result, not a
+ *  fallback case: returns false with code left empty, exactly like the
+ *  one-shot path's own failure contract. */
+bool runViaResidentHelper(const std::string& title, const std::string& url, std::string& code,
+                          bool& helperReachable)
+{
+	helperReachable = false;
+	std::string address = "unix:path=" + authIpcSocketPath();
+
+	GError* error = nullptr;
+	GDBusConnection* connection = g_dbus_connection_new_for_address_sync(
+	    address.c_str(), G_DBUS_CONNECTION_FLAGS_AUTHENTICATION_CLIENT, nullptr, nullptr, &error);
+	if (!connection)
+	{
+		// No resident helper listening -- not an error, just "not present".
+		g_error_free(error);
+		return false;
+	}
+	helperReachable = true;
+
+	CoffeeRdpAuth1* proxy = coffee_rdp_auth1_proxy_new_sync(
+	    connection, G_DBUS_PROXY_FLAGS_NONE, nullptr, "/com/codeneedscoffee/coffeerdp/Auth1",
+	    nullptr, &error);
+	if (!proxy)
+	{
+		WLog_WARN(TAG, "webview_impl_run: could not create proxy to resident auth helper: %s",
+		          error->message);
+		g_error_free(error);
+		g_object_unref(connection);
+		return false;
+	}
+	// An interactive login (MFA, account picker, ...) can take arbitrarily
+	// long; the proxy's 25s default timeout is for ordinary method calls,
+	// not this one.
+	g_dbus_proxy_set_default_timeout(G_DBUS_PROXY(proxy), G_MAXINT);
+
+	gchar* outCode = nullptr;
+	gboolean rc = coffee_rdp_auth1_call_request_token_sync(proxy, url.c_str(), title.c_str(),
+	                                                        &outCode, nullptr, &error);
+	g_object_unref(proxy);
+	g_object_unref(connection);
+
+	if (!rc)
+	{
+		WLog_WARN(TAG, "webview_impl_run: resident auth helper reported failure: %s",
+		          error->message);
+		g_error_free(error);
+		return false;
+	}
+
+	code = outCode ? outCode : "";
+	g_free(outCode);
+	return !code.empty();
+}
+
 bool isExecutable(const std::string& path)
 {
 	return !path.empty() && (access(path.c_str(), X_OK) == 0);
@@ -69,9 +142,8 @@ std::string findAuthHelper()
 
 	return "coffee-rdp-auth";
 }
-} // namespace
 
-bool webview_impl_run(const std::string& title, const std::string& url, std::string& code)
+bool runViaSpawnedHelper(const std::string& title, const std::string& url, std::string& code)
 {
 	auto helper = findAuthHelper();
 
@@ -139,4 +211,22 @@ bool webview_impl_run(const std::string& title, const std::string& url, std::str
 
 	code = output;
 	return true;
+}
+
+} // namespace
+
+bool webview_impl_run(const std::string& title, const std::string& url, std::string& code)
+{
+	bool helperReachable = false;
+	if (runViaResidentHelper(title, url, code, helperReachable))
+		return true;
+	if (helperReachable)
+	{
+		// The resident helper answered but the login itself failed or was
+		// cancelled: that's a real result, spawning a second, competing
+		// attempt would be wrong.
+		return false;
+	}
+
+	return runViaSpawnedHelper(title, url, code);
 }

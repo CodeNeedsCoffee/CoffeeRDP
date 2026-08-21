@@ -1,6 +1,6 @@
 Name:           coffeerdp
 Version:        0.1.0
-Release:        1%{?dist}
+Release:        2%{?dist}
 Summary:        RDP client with durable Entra ID login, built on FreeRDP's SDL3 client
 
 License:        Apache-2.0
@@ -23,6 +23,14 @@ BuildRequires:  SDL3_ttf-devel
 BuildRequires:  gtk4-devel
 BuildRequires:  libadwaita-devel
 BuildRequires:  webkitgtk6.0-devel
+# gdbus-codegen (the resident auth helper's GDBus interface, PLAN.md Phase
+# 7.5) and gio-2.0/gio-unix-2.0 already come in transitively via gtk4-devel,
+# but this project talks to them directly, not just through GTK, so it's
+# named explicitly rather than left implicit.
+BuildRequires:  glib2-devel
+# XDG Background portal client (run in the background past the manager
+# window closing, so the resident auth helper survives it too), Phase 7.5.
+BuildRequires:  libportal-gtk4-devel
 # %%check: validates the .desktop file and AppStream metadata at build time
 # so a broken one fails the package build, not a GNOME Software listing
 # after the fact.
@@ -41,7 +49,8 @@ client with a GTK4 connection manager on top of it.
 Features:
  * Wayland-first, with an automatic X11 fallback when Wayland can't deliver
  * Persistent Entra ID (Azure AD) login instead of a full MFA challenge
-   every connection
+   every connection, reusing one signed-in session for as long as coffeerdp
+   keeps running (optionally in the background past closing its window)
  * An idle keep-alive so sessions don't disconnect while you're away
  * An in-session control bar: disconnect, minimize, fullscreen/restore,
    keyboard capture, Ctrl+Alt+Del, Send Super, connection quality, and a
@@ -52,8 +61,11 @@ Features:
 This package installs three binaries: coffeerdp (the GTK4 connection
 manager -- the one with a desktop launcher), coffee-rdp-session (the SDL3
 session client it launches per connection), and coffee-rdp-auth (a
-WebKitGTK-based Entra ID sign-in helper run as its own subprocess so a
-renderer crash can't take the session down with it).
+WebKitGTK-based Entra ID sign-in helper). coffeerdp starts coffee-rdp-auth
+as a resident helper on first connect and keeps it running, over its own
+private connection, for as long as coffeerdp is open; closing the window
+offers to keep it running in the background (via the XDG Background
+portal) so that session survives past the window too.
 
 %prep
 %autosetup -p1
@@ -82,6 +94,14 @@ appstreamcli validate --no-net --pedantic \
 %{_datadir}/icons/hicolor/*/apps/com.codeneedscoffee.coffeerdp.manager.png
 
 %changelog
+* Fri Aug 21 2026 CodeNeedsCoffee <codeneedscoffee@gmail.com> - 0.1.0-2
+- Resident coffee-rdp-auth helper (Phase 7.5): coffeerdp now starts and
+  owns a long-lived auth helper on first connect instead of a fresh one
+  per connection, so a reconnect while it's open reuses the same signed-in
+  WebView. Adds an XDG Background portal request on window close so that
+  helper can keep running past the window closing too. New build/runtime
+  dependency: libportal-gtk4(-devel).
+
 * Thu Aug 20 2026 CodeNeedsCoffee <codeneedscoffee@gmail.com> - 0.1.0-1
 - First packaged release: session client, quality presets, idle keep-alive,
   the in-session floatbar, persistent Entra ID login, and the GTK4

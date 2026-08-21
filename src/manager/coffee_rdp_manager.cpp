@@ -9,11 +9,26 @@
  * The profile model and its on-disk store live in coffee_profiles.hpp,
  * deliberately GTK-free so they can be unit tested without a display
  * server; this file is only the UI on top of them.
+ *
+ * Phase 7.5 added two more responsibilities: owning a resident
+ * `coffee-rdp-auth --serve` helper (so reconnects while this app is open
+ * reuse the same long-lived WebView instead of restarting WebKit each
+ * time) and, on the main window's close, offering to keep running in the
+ * background via the XDG Background portal so that helper survives past
+ * the window closing, not just past a single connection. See
+ * ensureAuthHelperRunning()/stopAuthHelper() and onWindowCloseRequest().
  */
 
 #include <adwaita.h>
 #include <gtk/gtk.h>
+#include <gio/gio.h>
+#include <libportal/portal.h>
+#include <libportal-gtk4/portal-gtk4.h>
 
+#include <coffee-rdp-auth-generated.h>
+#include <coffee_auth_ipc.hpp>
+
+#include <csignal>
 #include <memory>
 #include <string>
 #include <vector>
@@ -46,6 +61,25 @@ struct AppState
 	GtkListBox* list = nullptr;
 	AdwViewStack* stack = nullptr;
 	AdwToastOverlay* toasts = nullptr;
+
+	GtkApplication* app = nullptr;
+
+	/* The resident auth helper this instance owns (PLAN.md Phase 7.5).
+	 * nullptr whenever none is known to be running -- ensureAuthHelperRunning()
+	 * starts one lazily on the first connect rather than at launch, since
+	 * plenty of manager sessions never connect at all. */
+	GSubprocess* authHelper = nullptr;
+
+	/* XDG Background portal state (see onWindowCloseRequest()). portal is
+	 * created lazily on first close since most runs may never need it.
+	 * backgroundGranted/backgroundDenied cache the answer for the rest of
+	 * this run so later closes don't re-prompt the portal every time --
+	 * GNOME's own portal backend already remembers the grant across runs,
+	 * this just avoids a redundant round trip within one. */
+	XdpPortal* portal = nullptr;
+	bool backgroundGranted = false;
+	bool backgroundDenied = false;
+	bool holding = false;
 };
 
 /* ---------------------------------------------------------------- helpers */
@@ -103,6 +137,127 @@ std::string sessionBinaryPath()
 	return "";
 }
 
+constexpr const char* kAuthHelperBinaryName = "coffee-rdp-auth";
+
+/** Same resolution order as sessionBinaryPath(), just for the auth helper's
+ *  sibling directory (.../build/src/manager/coffeerdp -> .../build/src/auth/
+ *  coffee-rdp-auth in the development case). */
+std::string authHelperBinaryPath()
+{
+	if (char* found = g_find_program_in_path(kAuthHelperBinaryName))
+	{
+		std::string path = found;
+		g_free(found);
+		return path;
+	}
+
+	char* self = g_file_read_link("/proc/self/exe", nullptr);
+	if (self)
+	{
+		gchar* dir = g_path_get_dirname(self);
+		gchar* sibling = g_build_filename(dir, "..", "auth", kAuthHelperBinaryName, nullptr);
+		std::string candidate = sibling;
+		g_free(sibling);
+		g_free(dir);
+		g_free(self);
+
+		if (g_file_test(candidate.c_str(), G_FILE_TEST_IS_EXECUTABLE))
+			return candidate;
+	}
+
+	return "";
+}
+
+void onAuthHelperExited(GObject* source, GAsyncResult* result, gpointer data)
+{
+	auto* st = static_cast<AppState*>(data);
+	GError* error = nullptr;
+	g_subprocess_wait_finish(G_SUBPROCESS(source), result, &error);
+	if (error)
+	{
+		g_printerr("coffeerdp: resident auth helper exited unexpectedly: %s\n", error->message);
+		g_error_free(error);
+	}
+	if (st->authHelper == G_SUBPROCESS(source))
+	{
+		g_object_unref(st->authHelper);
+		st->authHelper = nullptr;
+	}
+}
+
+/** Lazily starts the resident coffee-rdp-auth --serve helper. Best-effort:
+ *  if this fails for any reason, coffee-rdp-session's own webview_impl_run()
+ *  falls back to spawning a fresh one-shot helper on its own (PLAN.md Phase
+ *  7.5), so there's nothing to show the user here beyond a log line --
+ *  connecting still works either way. */
+void ensureAuthHelperRunning(AppState* st)
+{
+	if (st->authHelper)
+		return;
+
+	const auto binary = authHelperBinaryPath();
+	if (binary.empty())
+	{
+		g_printerr("coffeerdp: could not find %s -- reconnects will each spawn their own "
+		          "auth helper instead of reusing a resident one\n",
+		          kAuthHelperBinaryName);
+		return;
+	}
+
+	GError* error = nullptr;
+	st->authHelper =
+	    g_subprocess_new(G_SUBPROCESS_FLAGS_NONE, &error, binary.c_str(), "--serve", nullptr);
+	if (!st->authHelper)
+	{
+		g_printerr("coffeerdp: could not start resident auth helper: %s\n", error->message);
+		g_error_free(error);
+		return;
+	}
+	g_subprocess_wait_async(st->authHelper, nullptr, onAuthHelperExited, st);
+}
+
+/** Asks the resident helper to exit cleanly over its own IPC (same
+ *  mechanism coffee-rdp-session uses to request a login, see
+ *  webview_impl.cpp), falling back to SIGTERM if it's unreachable or
+ *  doesn't answer -- this runs from "shutdown", so the process needs to
+ *  actually be gone or on its way out either way. */
+void stopAuthHelper(AppState* st)
+{
+	if (!st->authHelper)
+		return;
+
+	GSubprocess* helper = st->authHelper;
+	st->authHelper = nullptr;
+
+	gboolean quitAcked = FALSE;
+	std::string address = "unix:path=" + authIpcSocketPath();
+	GError* error = nullptr;
+	GDBusConnection* connection = g_dbus_connection_new_for_address_sync(
+	    address.c_str(), G_DBUS_CONNECTION_FLAGS_AUTHENTICATION_CLIENT, nullptr, nullptr, &error);
+	if (connection)
+	{
+		CoffeeRdpAuth1* proxy = coffee_rdp_auth1_proxy_new_sync(
+		    connection, G_DBUS_PROXY_FLAGS_NONE, nullptr, "/com/codeneedscoffee/coffeerdp/Auth1",
+		    nullptr, nullptr);
+		if (proxy)
+		{
+			g_dbus_proxy_set_default_timeout(G_DBUS_PROXY(proxy), 2000);
+			GError* callError = nullptr;
+			quitAcked = coffee_rdp_auth1_call_quit_sync(proxy, nullptr, &callError);
+			if (callError)
+				g_error_free(callError);
+			g_object_unref(proxy);
+		}
+		g_object_unref(connection);
+	}
+	else if (error)
+		g_error_free(error);
+
+	if (!quitAcked)
+		g_subprocess_send_signal(helper, SIGTERM);
+	g_object_unref(helper);
+}
+
 /** Registers the source tree's resources/icon/ (which mirrors a real
  *  hicolor icon theme's layout -- hicolor/<size>x<size>/apps/) as an extra
  *  icon-theme search path, so a development build run straight out of
@@ -134,6 +289,8 @@ void registerDevIconThemePath(GtkWidget* forWidget)
 
 void connectToProfile(AppState* st, const CoffeeProfile& profile)
 {
+	ensureAuthHelperRunning(st);
+
 	const auto binary = sessionBinaryPath();
 	if (binary.empty())
 	{
@@ -1011,12 +1168,117 @@ gboolean onWindowDrop(GtkDropTarget*, const GValue* value, double, double, gpoin
 	return imported > 0;
 }
 
+/* ---------------------------------------------------- background/quit --- */
+
+void onQuitAction(GSimpleAction*, GVariant*, gpointer data)
+{
+	auto* st = static_cast<AppState*>(data);
+	/* Bypasses any g_application_hold() from onWindowCloseRequest() below --
+	 * this is the explicit, user-requested "actually quit" path (menu item
+	 * or Ctrl+Q), as opposed to an ordinary window close, which may instead
+	 * choose to keep running in the background. */
+	g_application_quit(G_APPLICATION(st->app));
+}
+
+void onShutdown(GApplication*, gpointer data)
+{
+	auto* st = static_cast<AppState*>(data);
+	stopAuthHelper(st);
+	if (st->portal)
+	{
+		g_object_unref(st->portal);
+		st->portal = nullptr;
+	}
+}
+
+void onBackgroundRequested(GObject* source, GAsyncResult* result, gpointer data)
+{
+	auto* st = static_cast<AppState*>(data);
+	GError* error = nullptr;
+	gboolean granted = xdp_portal_request_background_finish(XDP_PORTAL(source), result, &error);
+
+	if (!granted)
+	{
+		g_printerr("coffeerdp: background permission denied or unavailable%s%s\n",
+		          error ? ": " : "", error && error->message ? error->message : "");
+		if (error)
+			g_error_free(error);
+		st->backgroundDenied = true;
+		/* We held the close for this async round trip (see
+		 * onWindowCloseRequest()); now that the answer is "no", actually
+		 * finish closing. gtk_window_destroy() doesn't re-emit
+		 * "close-request", so this can't loop back here. */
+		gtk_window_destroy(GTK_WINDOW(st->window));
+		return;
+	}
+
+	st->backgroundGranted = true;
+	if (!st->holding)
+	{
+		g_application_hold(G_APPLICATION(st->app));
+		st->holding = true;
+	}
+	gtk_widget_set_visible(GTK_WIDGET(st->window), FALSE);
+}
+
+/** Runs on the main window's close button/Escape/Alt+F4. Ordinarily that
+ *  would just close the window and (with no other hold on the
+ *  application) quit -- taking the resident auth helper down with it, so
+ *  the very benefit Phase 7.5 exists for would only last until you close
+ *  the window, not until you actually quit. Instead, this asks the XDG
+ *  Background portal for permission to keep running; GNOME shows its
+ *  standard "X wants to run in the background" prompt the first time (and
+ *  lists coffeerdp under Settings -> Apps -> Background Activity from then
+ *  on, where the user can revoke it). If that's denied, or the portal
+ *  isn't available at all (non-GNOME/no portal), this falls back to
+ *  closing for real -- the feature is strictly additive, never a reason a
+ *  close doesn't work. */
+gboolean onWindowCloseRequest(GtkWindow* window, gpointer data)
+{
+	auto* st = static_cast<AppState*>(data);
+
+	if (st->backgroundDenied)
+		return FALSE; // already answered "no" this run, don't ask again
+
+	if (st->backgroundGranted)
+	{
+		if (!st->holding)
+		{
+			g_application_hold(G_APPLICATION(st->app));
+			st->holding = true;
+		}
+		gtk_widget_set_visible(GTK_WIDGET(window), FALSE);
+		return TRUE;
+	}
+
+	if (!st->portal)
+		st->portal = xdp_portal_new();
+
+	XdpParent* parent = xdp_parent_new_gtk(window);
+	static char reason[] = "Keep your Entra ID sign-in active for reconnects";
+	xdp_portal_request_background(st->portal, parent, reason, nullptr, XDP_BACKGROUND_FLAG_NONE,
+	                              nullptr, onBackgroundRequested, st);
+	xdp_parent_free(parent);
+
+	return TRUE; // hold the close until the async portal round trip answers
+}
+
 void onActivate(GtkApplication* app, gpointer data)
 {
 	auto* st = static_cast<AppState*>(data);
 
+	if (st->window)
+	{
+		// Re-activation while backgrounded (see onWindowCloseRequest()):
+		// the window already exists, just bring it back.
+		gtk_widget_set_visible(GTK_WIDGET(st->window), TRUE);
+		gtk_window_present(GTK_WINDOW(st->window));
+		return;
+	}
+
 	auto* window = ADW_APPLICATION_WINDOW(adw_application_window_new(app));
 	st->window = window;
+	g_signal_connect(window, "close-request", G_CALLBACK(onWindowCloseRequest), st);
 	gtk_window_set_title(GTK_WINDOW(window), "CoffeeRDP");
 	gtk_window_set_default_size(GTK_WINDOW(window), 640, 520);
 
@@ -1052,6 +1314,16 @@ void onActivate(GtkApplication* app, gpointer data)
 	gtk_widget_set_tooltip_text(import, "Import .rdp file…");
 	g_signal_connect(import, "clicked", G_CALLBACK(onImportClicked), st);
 	adw_header_bar_pack_start(ADW_HEADER_BAR(header), import);
+
+	/* Only real entry today is Quit -- the reachable way out when closing
+	 * the window just backgrounds it instead (onWindowCloseRequest()). */
+	auto* menu = g_menu_new();
+	g_menu_append(menu, "Quit", "app.quit");
+	auto* menuButton = gtk_menu_button_new();
+	gtk_menu_button_set_icon_name(GTK_MENU_BUTTON(menuButton), "open-menu-symbolic");
+	gtk_menu_button_set_menu_model(GTK_MENU_BUTTON(menuButton), G_MENU_MODEL(menu));
+	g_object_unref(menu);
+	adw_header_bar_pack_end(ADW_HEADER_BAR(header), menuButton);
 
 	adw_toolbar_view_add_top_bar(ADW_TOOLBAR_VIEW(toolbar), header);
 
@@ -1139,7 +1411,16 @@ int main(int argc, char** argv)
 		           st.storePath.c_str());
 
 	auto* app = adw_application_new(kApplicationId, G_APPLICATION_DEFAULT_FLAGS);
+	st.app = GTK_APPLICATION(app);
 	g_signal_connect(app, "activate", G_CALLBACK(onActivate), &st);
+	g_signal_connect(app, "shutdown", G_CALLBACK(onShutdown), &st);
+
+	auto* quitAction = g_simple_action_new("quit", nullptr);
+	g_signal_connect(quitAction, "activate", G_CALLBACK(onQuitAction), &st);
+	g_action_map_add_action(G_ACTION_MAP(app), G_ACTION(quitAction));
+	g_object_unref(quitAction);
+	const char* quitAccels[] = { "<Control>q", nullptr };
+	gtk_application_set_accels_for_action(GTK_APPLICATION(app), "app.quit", quitAccels);
 
 	const int status = g_application_run(G_APPLICATION(app), argc, argv);
 	g_object_unref(app);

@@ -1,0 +1,38 @@
+<!DOCTYPE node PUBLIC
+"-//freedesktop//DTD D-Bus Object Introspection 1.0//EN"
+"http://www.freedesktop.org/standards/dbus/1.0/introspect.dtd">
+<!--
+  Peer-to-peer D-Bus interface between coffee-rdp-session (client, one per
+  connection) and the resident coffee-rdp-auth serve helper (server, one
+  per running coffeerdp instance). Not a session-bus service: there is no
+  well-known bus name here, this is spoken over a private GDBusServer
+  listening on a unix socket at $XDG_RUNTIME_DIR/coffeerdp/auth.sock (see
+  PLAN.md Phase 7.5). gdbus-codegen still applies identically to P2P
+  connections, so the generated skeleton/proxy pair is used exactly as it
+  would be for a bus service.
+-->
+<node name="/com/codeneedscoffee/coffeerdp/Auth1">
+ <interface name="com.codeneedscoffee.coffeerdp.Auth1">
+  <!--
+    Runs (or reuses) the resident AAD/AVD login WebView against `url`,
+    attempting a hidden, off-screen load first and only presenting a visible
+    window if the server doesn't answer the redirect within a short window
+    (see coffee-rdp-auth's ScheduleReveal). Blocks for as long as an actual
+    interactive login takes: there is deliberately no client-side timeout
+    here beyond what GDBus itself imposes when told to wait indefinitely.
+  -->
+  <method name="RequestToken">
+   <arg type="s" name="url" direction="in"/>
+   <arg type="s" name="title" direction="in"/>
+   <arg type="s" name="code" direction="out"/>
+  </method>
+  <!--
+    Asks the resident helper to exit after any in-flight RequestToken call
+    finishes. Sent by the connection manager on a real, explicit quit (not
+    on ordinary window-close, see Phase 7.5's background-portal design) so
+    the helper doesn't outlive the app that owns it.
+  -->
+  <method name="Quit">
+  </method>
+ </interface>
+</node>

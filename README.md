@@ -9,7 +9,8 @@ Goals:
 
 - Wayland-first, with an automatic X11 fallback when Wayland can't deliver
 - Persistent Entra ID (AAD) login instead of a full MFA challenge every
-  connection
+  connection, reusing one signed-in session for as long as coffeerdp is
+  open (optionally in the background past closing its window)
 - An idle keep-alive so sessions don't disconnect while you're away
 - A compact in-session control bar: pin, an overflow menu, minimize,
   fullscreen/restore, and disconnect, with keyboard capture, Ctrl+Alt+Del,
@@ -51,8 +52,10 @@ launcher entry. See PACKAGING.md for more.
 Requires FreeRDP 3's development packages (pkg-config modules `freerdp3`,
 `freerdp-client3`, `winpr3`; on Fedora, the `freerdp-devel` and
 `libwinpr-devel` RPMs, despite the version-3 naming only showing up in the
-pkg-config files themselves), SDL3 and SDL3_ttf, GTK4, libadwaita, and
-webkitgtk 6.0.
+pkg-config files themselves), SDL3 and SDL3_ttf, GTK4, libadwaita,
+webkitgtk 6.0, glib2 (gio/gdbus-codegen, already pulled in transitively by
+GTK4 but named explicitly), and libportal-gtk4 (the XDG Background portal
+client, for running past the manager window closing).
 
 ```sh
 cmake -S . -B build -GNinja
@@ -64,8 +67,12 @@ ninja -C build
 ```
 src/session/   SDL3 session client (forked from FreeRDP's client/SDL/SDL3
                and client/SDL/common), built at build/src/session
-src/auth/      Standalone GTK4/WebKit AAD login helper, run as a subprocess
-               by the session client, built at build/src/auth
+src/auth/      GTK4/WebKit AAD login helper, either run one-shot per
+               connection or resident (`--serve`, owned by coffeerdp) and
+               reused across them, built at build/src/auth
+src/auth-ipc/  GDBus interface shared between coffee-rdp-session and the
+               resident coffee-rdp-auth --serve helper (peer-to-peer, not
+               the session bus), built at build/src/auth-ipc
 src/manager/   GTK4 connection manager, built at build/src/manager
 resources/     Bundled assets: fonts and the app icon
 packaging/     RPM spec (see RELEASING.md)
