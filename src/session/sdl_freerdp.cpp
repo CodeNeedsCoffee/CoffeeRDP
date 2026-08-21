@@ -966,6 +966,23 @@ int main(int argc, char* argv[])
 	           args.end());
 	sdl->getInputChannelContext().setHotkeysEnabled(!disableShortcuts);
 
+	/* /cert:ignore fallback for a .rdp file launched directly (bypassing the
+	 * manager, which already passes /cert:ignore explicitly when a profile
+	 * has it on -- see CoffeeProfileStore::sessionArgs()). Unlike
+	 * /disable-shortcuts, /cert: is a genuine FreeRDP flag its own
+	 * command-line parser already recognizes, so this just adds the token
+	 * rather than needing the strip-then-reapply dance those custom flags
+	 * require -- nothing here needs to run before the parse call for
+	 * FreeRDP's own sake, only so the flag actually reaches it. */
+	if (!rdpFilePath.empty())
+	{
+		if (auto v = coffee_rdp_file_scan_key(rdpFilePath, "ignore certificate errors"))
+		{
+			if (*v == "1")
+				args.push_back(const_cast<char*>("/cert:ignore"));
+		}
+	}
+
 	auto status = freerdp_client_settings_parse_command_line_ex(
 	    settings, WINPR_ASSERTING_INT_CAST(int, args.size()), args.data(), FALSE, sdl->args(),
 	    sdl->argsCount(), &SdlContext::argumentHandler, sdl);

@@ -49,6 +49,20 @@ struct CoffeeProfile
 	 *  overrides it. A dropdown toggle in the floatbar can still flip this
 	 *  mid-session; this field only controls the starting state. */
 	bool disableShortcuts = false;
+	/** Skips TLS certificate verification entirely (FreeRDP's own
+	 *  `/cert:ignore`) -- for hosts behind Azure AD/AVD's P2P-Access broker,
+	 *  which reissue a new short-lived host certificate roughly daily,
+	 *  making the "certificate has changed" prompt fire on essentially every
+	 *  connection even though nothing is actually wrong. FreeRDP's own
+	 *  `/cert:tofu` (auto-accept-on-first-use) does NOT cover this: it only
+	 *  skips the prompt for a certificate it has never seen before, not one
+	 *  that changed from a previously-trusted one (confirmed against
+	 *  libfreerdp/crypto/tls.c -- the AutoAcceptCertificate check only runs
+	 *  in the "never seen" branch, not the "changed" one) -- ignore is the
+	 *  only built-in way to suppress a *changed*-certificate prompt. This
+	 *  also disables FreeRDP's ability to detect a real MITM attack, so it's
+	 *  opt-in per profile, not a default. */
+	bool ignoreCertificateErrors = false;
 	/** One of the §2.4 preset names: speed|balanced|quality|best|auto.
 	 *  Empty means "don't pass /quality:, let the session default apply". */
 	std::string quality;

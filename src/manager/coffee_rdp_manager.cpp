@@ -236,6 +236,7 @@ struct EditDialog
 	GtkWidget* domain = nullptr;
 	GtkWidget* aadAuth = nullptr;
 	GtkWidget* disableShortcuts = nullptr;
+	GtkWidget* ignoreCertificateErrors = nullptr;
 	GtkWidget* quality = nullptr;
 	GtkWidget* multimon = nullptr;
 	GtkWidget* fullscreen = nullptr;
@@ -286,6 +287,7 @@ void populateFields(EditDialog* ed, const CoffeeProfile& p)
 	gtk_editable_set_text(GTK_EDITABLE(ed->domain), p.domain.c_str());
 	adw_switch_row_set_active(ADW_SWITCH_ROW(ed->aadAuth), p.aadAuth);
 	adw_switch_row_set_active(ADW_SWITCH_ROW(ed->disableShortcuts), p.disableShortcuts);
+	adw_switch_row_set_active(ADW_SWITCH_ROW(ed->ignoreCertificateErrors), p.ignoreCertificateErrors);
 	adw_combo_row_set_selected(ADW_COMBO_ROW(ed->quality),
 	                           static_cast<guint>(qualityIndex(p.quality)));
 	adw_switch_row_set_active(ADW_SWITCH_ROW(ed->multimon), p.multimon);
@@ -368,6 +370,8 @@ void onEditSave(GtkButton*, gpointer data)
 	p.domain = entryText(ed->domain);
 	p.aadAuth = adw_switch_row_get_active(ADW_SWITCH_ROW(ed->aadAuth));
 	p.disableShortcuts = adw_switch_row_get_active(ADW_SWITCH_ROW(ed->disableShortcuts));
+	p.ignoreCertificateErrors =
+	    adw_switch_row_get_active(ADW_SWITCH_ROW(ed->ignoreCertificateErrors));
 
 	const guint qsel = adw_combo_row_get_selected(ADW_COMBO_ROW(ed->quality));
 	p.quality = kQualityOptions[qsel] ? kQualityOptions[qsel] : "";
@@ -509,6 +513,13 @@ void presentEditDialog(AppState* st, const CoffeeProfile* existing,
 	    "Right Shift + key combos (minimize, fullscreen, etc.) inside the session. Can still "
 	    "be re-enabled mid-session from the floatbar's dropdown.",
 	    seed.disableShortcuts);
+	ed->ignoreCertificateErrors = addSwitchRow(
+	    connGroup, "Always trust this server's certificate",
+	    "Skips TLS certificate checks entirely -- useful for AVD/Entra-joined hosts, whose "
+	    "certificate rotates roughly daily and otherwise triggers a \"certificate has "
+	    "changed\" prompt on nearly every connection. Also disables detection of a real "
+	    "man-in-the-middle attack, so only enable this for hosts you trust.",
+	    seed.ignoreCertificateErrors);
 	adw_preferences_page_add(ADW_PREFERENCES_PAGE(page), ADW_PREFERENCES_GROUP(connGroup));
 
 	auto* displayGroup = adw_preferences_group_new();

@@ -82,6 +82,13 @@ constexpr const char* kIdleCombo = "idle keypress combo";
  * session-launch time) -- no shared header between the two binaries for
  * this one key, same as the three above. */
 constexpr const char* kDisableShortcuts = "disable shortcuts";
+/* Same reasoning/pairing as kDisableShortcuts above -- must match the
+ * literal string sdl_freerdp.cpp scans for on a direct .rdp launch. Unlike
+ * /disable-shortcuts, sessionArgs() maps this to a genuine FreeRDP flag
+ * (/cert:ignore) rather than a CoffeeRDP-invented one, but the key still has
+ * to be custom: FreeRDP's own .rdp file parser has no key for
+ * IgnoreCertificate at all (confirmed against client/common/file.c). */
+constexpr const char* kIgnoreCertificateErrors = "ignore certificate errors";
 
 constexpr int kScreenModeFullscreen = 2;
 constexpr int kScreenModeWindowed = 1;
@@ -458,6 +465,9 @@ void coffee_rdp_document_to_profile(const CoffeeRdpDocument& doc, CoffeeProfile&
 
 	if (const auto shortcuts = doc.getString(kDisableShortcuts))
 		profile.disableShortcuts = (*shortcuts == "1");
+
+	if (const auto ignoreCert = doc.getString(kIgnoreCertificateErrors))
+		profile.ignoreCertificateErrors = (*ignoreCert == "1");
 }
 
 void coffee_rdp_document_from_profile(const CoffeeProfile& profile, CoffeeRdpDocument& doc)
@@ -539,4 +549,11 @@ void coffee_rdp_document_from_profile(const CoffeeProfile& profile, CoffeeRdpDoc
 	 * not one FreeRDP's own parser reads. */
 	if (profile.disableShortcuts || doc.has(kDisableShortcuts))
 		doc.setString(kDisableShortcuts, profile.disableShortcuts ? "1" : "0");
+
+	/* Same "write an explicit 0 rather than just stop writing 1" reasoning
+	 * as kDisableShortcuts/kEnableRdsAadAuth above -- a stale "1" left in
+	 * the file would silently keep ignoring certificate errors after the
+	 * user turned it back off. */
+	if (profile.ignoreCertificateErrors || doc.has(kIgnoreCertificateErrors))
+		doc.setString(kIgnoreCertificateErrors, profile.ignoreCertificateErrors ? "1" : "0");
 }

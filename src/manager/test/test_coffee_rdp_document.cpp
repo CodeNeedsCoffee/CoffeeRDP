@@ -302,6 +302,41 @@ void check_disable_shortcuts_round_trips()
 	expect(!readBack.disableShortcuts, "'disable shortcuts:s:0' parses as off");
 }
 
+void check_ignore_certificate_errors_round_trips()
+{
+	// Off by default, and not invented for a file that never mentioned it.
+	CoffeeRdpDocument fresh;
+	CoffeeProfile p;
+	p.host = "h";
+	coffee_rdp_document_from_profile(p, fresh);
+	expect(!fresh.has("ignore certificate errors"),
+	       "a non-ignoring profile does not add 'ignore certificate errors' to a file that "
+	       "lacked it");
+
+	p.ignoreCertificateErrors = true;
+	coffee_rdp_document_from_profile(p, fresh);
+	expect(fresh.getString("ignore certificate errors").value_or("") == "1",
+	       "ignoring certificate errors writes 'ignore certificate errors:s:1'");
+
+	/* Same reasoning as the other CoffeeRDP-custom flags: turning it off
+	 * must write an explicit 0, not just stop writing 1, or the file's
+	 * stale 1 would silently keep skipping certificate checks -- the
+	 * MITM-detection tradeoff this field makes should never outlive the
+	 * user turning it back off. */
+	p.ignoreCertificateErrors = false;
+	coffee_rdp_document_from_profile(p, fresh);
+	expect(fresh.getString("ignore certificate errors").value_or("") == "0",
+	       "re-enabling certificate checks writes an explicit 0 over the file's 1");
+
+	// A bare "0" in a file must read back as off, not merely "key present".
+	CoffeeRdpDocument disabled;
+	disabled.setString("ignore certificate errors", "0");
+	CoffeeProfile readBack;
+	readBack.ignoreCertificateErrors = true;
+	coffee_rdp_document_to_profile(disabled, readBack);
+	expect(!readBack.ignoreCertificateErrors, "'ignore certificate errors:s:0' parses as off");
+}
+
 void check_empty_values_remove_keys()
 {
 	CoffeeRdpDocument doc;
@@ -634,6 +669,7 @@ int main()
 	check_port_handling();
 	check_aad_flag_round_trips();
 	check_disable_shortcuts_round_trips();
+	check_ignore_certificate_errors_round_trips();
 	check_empty_values_remove_keys();
 	check_coffeerdp_keys_use_string_type();
 	check_keepalive_zero_is_written();

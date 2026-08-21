@@ -55,6 +55,7 @@ CoffeeProfile sampleProfile()
 	p.quality = "balanced";
 	p.aadAuth = true;
 	p.disableShortcuts = true;
+	p.ignoreCertificateErrors = true;
 	p.multimon = true;
 	p.fullscreen = true;
 	p.idleKeepAliveSeconds = 30;
@@ -163,6 +164,9 @@ void check_round_trip()
 		expect(back->aadAuth, "aad_auth=true round-trips -- losing it drops the profile to NLA");
 		expect(back->disableShortcuts,
 		       "disable_shortcuts=true round-trips -- losing it silently re-enables shortcuts");
+		expect(back->ignoreCertificateErrors,
+		       "ignore_certificate_errors=true round-trips -- losing it brings back the "
+		       "changed-certificate prompt on every connection");
 		expect(back->multimon, "multimon=true round-trips");
 		expect(!back->fullscreen, "fullscreen=false round-trips (not silently defaulted to true)");
 		expect(back->idleKeepAliveSeconds == 0,
@@ -345,6 +349,13 @@ void check_session_args()
 		expect(contains(CoffeeProfileStore::sessionArgs(linked), "/disable-shortcuts"),
 		       "/disable-shortcuts is still passed when a .rdp file is linked");
 	}
+
+	expect(contains(args, "/cert:ignore"),
+	       "ignoreCertificateErrors=true becomes /cert:ignore");
+	p.ignoreCertificateErrors = false;
+	expect(!contains(CoffeeProfileStore::sessionArgs(p), "/cert:ignore"),
+	       "no /cert:ignore flag when certificate errors are left enforced (the safe default)");
+	p.ignoreCertificateErrors = true;
 
 	// Non-default port.
 	p.port = 3390;

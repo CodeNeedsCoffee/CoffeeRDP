@@ -225,6 +225,8 @@ bool CoffeeProfileStore::load(const std::string& path)
 			current.aadAuth = parseBool(value, false);
 		else if (key == "disable_shortcuts")
 			current.disableShortcuts = parseBool(value, false);
+		else if (key == "ignore_certificate_errors")
+			current.ignoreCertificateErrors = parseBool(value, false);
 		else if (key == "quality")
 			current.quality = value;
 		else if (key == "multimon")
@@ -272,6 +274,7 @@ bool CoffeeProfileStore::save(const std::string& path) const
 			out << "domain = " << p.domain << "\n";
 			out << "aad_auth = " << boolToString(p.aadAuth) << "\n";
 			out << "disable_shortcuts = " << boolToString(p.disableShortcuts) << "\n";
+			out << "ignore_certificate_errors = " << boolToString(p.ignoreCertificateErrors) << "\n";
 			out << "quality = " << p.quality << "\n";
 			out << "multimon = " << boolToString(p.multimon) << "\n";
 			out << "fullscreen = " << boolToString(p.fullscreen) << "\n";
@@ -435,6 +438,13 @@ std::vector<std::string> CoffeeProfileStore::sessionArgs(const CoffeeProfile& pr
 	 * only sets where the session starts. */
 	if (profile.disableShortcuts)
 		args.push_back("/disable-shortcuts");
+
+	/* Unlike /disable-shortcuts, this is a genuine FreeRDP flag (not a
+	 * CoffeeRDP-invented one) -- FreeRDP's own command-line parser already
+	 * recognizes /cert:, so nothing on the session side needs to strip or
+	 * pre-parse it the way /quality:/idle-keypress-*:/disable-shortcuts do. */
+	if (profile.ignoreCertificateErrors)
+		args.push_back("/cert:ignore");
 
 	return args;
 }
