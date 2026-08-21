@@ -1,6 +1,6 @@
 Name:           coffeerdp
 Version:        0.1.0
-Release:        2%{?dist}
+Release:        3%{?dist}
 Summary:        RDP client with durable Entra ID login, built on FreeRDP's SDL3 client
 
 License:        Apache-2.0
@@ -18,6 +18,18 @@ BuildRequires:  pkgconfig
 # mismatch between this BuildRequires and the "3" everywhere else here.
 BuildRequires:  freerdp-devel
 BuildRequires:  libwinpr-devel
+# Not a compile-time dependency at all, but a configure-time one: WinPR's
+# installed CMake config (/usr/lib64/cmake/WinPR3/WinPRTargets.cmake, pulled
+# in by FreeRDPConfig.cmake -> find_dependency(WinPR), which our
+# src/session/CMakeLists.txt's find_package(FreeRDP 3) reaches) declares an
+# IMPORTED target for the winpr-makecert *binary* and hard-fails configure if
+# the file is missing. That binary ships in the main `freerdp` package, while
+# freerdp-devel only requires `freerdp-libs`, so a clean chroot has the CMake
+# config but not the executable it points at. Invisible on a dev box (where
+# `freerdp` is installed anyway) and it's exactly what broke Copr build
+# 10889775 on all three chroots. Requiring the path rather than the package
+# keeps this correct if Fedora ever moves the WinPR tools elsewhere.
+BuildRequires:  /usr/bin/winpr-makecert
 BuildRequires:  SDL3-devel
 BuildRequires:  SDL3_ttf-devel
 BuildRequires:  gtk4-devel
@@ -94,6 +106,14 @@ appstreamcli validate --no-net --pedantic \
 %{_datadir}/icons/hicolor/*/apps/com.codeneedscoffee.coffeerdp.manager.png
 
 %changelog
+* Fri Aug 21 2026 CodeNeedsCoffee <codeneedscoffee@gmail.com> - 0.1.0-3
+- Fix the build failing in a clean chroot (Copr build 10889775, all three
+  targets): WinPR's CMake config declares an imported target for the
+  winpr-makecert binary, which lives in the main `freerdp` package rather
+  than freerdp-devel, so configure hard-failed where it had always
+  succeeded on a dev box that happened to have `freerdp` installed. Added
+  the missing BuildRequires.
+
 * Fri Aug 21 2026 CodeNeedsCoffee <codeneedscoffee@gmail.com> - 0.1.0-2
 - Resident coffee-rdp-auth helper (Phase 7.5): coffeerdp now starts and
   owns a long-lived auth helper on first connect instead of a fresh one
