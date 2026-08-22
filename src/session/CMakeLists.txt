@@ -90,3 +90,14 @@ target_link_libraries(${MODULE_NAME} PRIVATE
 )
 
 install(TARGETS ${MODULE_NAME} DESTINATION ${CMAKE_INSTALL_PREFIX}/bin)
+
+# NoDisplay desktop entry, id matching SDL_CLIENT_UUID above (the Wayland
+# xdg_toplevel app_id / X11 WM_CLASS this binary sets via
+# SDL_PROP_APP_METADATA_IDENTIFIER_STRING, see sdl_context.cpp). Without
+# this, GNOME/Mutter has nothing to resolve that app_id against and shows
+# the raw id string with a generic icon in the dock/alt-tab/tooltips
+# instead of the CoffeeRDP name and icon. NoDisplay=true keeps it out of
+# the app grid and search: this binary is spawned per connection by
+# coffeerdp, not something launched directly.
+install(FILES data/com.codeneedscoffee.coffeerdp.session.desktop
+       DESTINATION ${CMAKE_INSTALL_PREFIX}/share/applications)

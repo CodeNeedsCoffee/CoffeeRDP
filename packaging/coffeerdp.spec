@@ -1,6 +1,6 @@
 Name:           coffeerdp
 Version:        0.1.0
-Release:        3%{?dist}
+Release:        4%{?dist}
 Summary:        RDP client with durable Entra ID login, built on FreeRDP's SDL3 client
 
 License:        Apache-2.0
@@ -92,6 +92,7 @@ portal) so that session survives past the window too.
 %check
 %ctest
 desktop-file-validate %{buildroot}%{_datadir}/applications/com.codeneedscoffee.coffeerdp.manager.desktop
+desktop-file-validate %{buildroot}%{_datadir}/applications/com.codeneedscoffee.coffeerdp.session.desktop
 appstreamcli validate --no-net --pedantic \
     %{buildroot}%{_datadir}/metainfo/com.codeneedscoffee.coffeerdp.manager.metainfo.xml
 
@@ -102,10 +103,18 @@ appstreamcli validate --no-net --pedantic \
 %{_bindir}/coffee-rdp-session
 %{_bindir}/coffee-rdp-auth
 %{_datadir}/applications/com.codeneedscoffee.coffeerdp.manager.desktop
+%{_datadir}/applications/com.codeneedscoffee.coffeerdp.session.desktop
 %{_datadir}/metainfo/com.codeneedscoffee.coffeerdp.manager.metainfo.xml
 %{_datadir}/icons/hicolor/*/apps/com.codeneedscoffee.coffeerdp.manager.png
 
 %changelog
+* Fri Aug 21 2026 CodeNeedsCoffee <codeneedscoffee@gmail.com> - 0.1.0-4
+- Give coffee-rdp-session a NoDisplay desktop entry matching its Wayland
+  app_id/X11 WM_CLASS (com.codeneedscoffee.coffeerdp.session), reusing the
+  manager's icon. Without it, GNOME had nothing to resolve that id
+  against and showed the raw string with a generic icon in the dock,
+  alt-tab, and window tooltips instead of the CoffeeRDP name and icon.
+
 * Fri Aug 21 2026 CodeNeedsCoffee <codeneedscoffee@gmail.com> - 0.1.0-3
 - Fix the build failing in a clean chroot (Copr build 10889775, all three
   targets): WinPR's CMake config declares an imported target for the

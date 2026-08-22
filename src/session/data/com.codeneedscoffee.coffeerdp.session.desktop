@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=CoffeeRDP
+GenericName=Remote Desktop Session
+Comment=An active CoffeeRDP connection
+Exec=coffee-rdp-session
+Icon=com.codeneedscoffee.coffeerdp.manager
+Terminal=false
+Categories=Network;RemoteAccess;
+NoDisplay=true
