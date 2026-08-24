@@ -226,10 +226,18 @@ bool SdlFloatbar::render()
 
 	SdlBlendModeGuard guard(_renderer, SDL_BLENDMODE_BLEND);
 
+	/* Best-effort from here down, same reasoning as SdlButtonList::update():
+	 * the caller (drawFloatbarOverlay()) already ignores this return value,
+	 * so a transient failure on one piece (say, the grip icon) has no
+	 * reason to also skip the divider, the buttons, and -- worst of all,
+	 * because it was drawn last -- the just-opened dropdown menu entirely.
+	 * Drawing everything we can and reporting overall success afterward
+	 * avoids that cascade. */
+	bool ok = true;
+
 	const SDL_FRect barRect{ static_cast<float>(_state.offsetX()), static_cast<float>(_state.offsetY()),
 		                     static_cast<float>(_state.barWidth()), static_cast<float>(kBarHeight) };
-	if (!sdl_icons::fillRoundedRect(_renderer.get(), barRect, kBarCornerRadius, kBarBg))
-		return false;
+	ok = sdl_icons::fillRoundedRect(_renderer.get(), barRect, kBarCornerRadius, kBarBg) && ok;
 
 	/* Purely decorative -- the right margin (kOuterMargin, between the last
 	 * button and the bar's rounded edge) is already drag-enabled background
@@ -240,30 +248,26 @@ bool SdlFloatbar::render()
 	 * Pin for the bar's leading edge. */
 	const SDL_FRect gripRect{ barRect.x + barRect.w - kOuterMargin, barRect.y,
 		                      static_cast<float>(kOuterMargin), barRect.h };
-	if (!sdl_icons::drawGripDotsIcon(_renderer.get(), gripRect, kMutedColor))
-		return false;
+	ok = sdl_icons::drawGripDotsIcon(_renderer.get(), gripRect, kMutedColor) && ok;
 
 	/* Divider between the app-action group (Pin, overflow menu) and the
 	 * window-control group (Maximize/Minimize/Close) -- see
 	 * rebuildButtons()'s _groupDividerX derivation. */
 	const float dividerTop = barRect.y + barRect.h * 0.24f;
 	const float dividerBottom = barRect.y + barRect.h * 0.76f;
-	if (!sdl_icons::fillThickLine(_renderer.get(), { _groupDividerX, dividerTop },
-	                              { _groupDividerX, dividerBottom }, 1.6f, kDivider))
-		return false;
+	ok = sdl_icons::fillThickLine(_renderer.get(), { _groupDividerX, dividerTop },
+	                              { _groupDividerX, dividerBottom }, 1.6f, kDivider) &&
+	    ok;
 
-	if (!_buttons.update())
-		return false;
+	ok = _buttons.update() && ok;
 
 	if (_menuOpen)
 	{
-		if (!sdl_icons::fillRoundedRect(_renderer.get(), _menuRect, kMenuCornerRadius, kMenuBg))
-			return false;
-		if (!_menuButtons.update())
-			return false;
+		ok = sdl_icons::fillRoundedRect(_renderer.get(), _menuRect, kMenuCornerRadius, kMenuBg) && ok;
+		ok = _menuButtons.update() && ok;
 	}
 
-	return true;
+	return ok;
 }
 
 void SdlFloatbar::setKeepAliveEnabled(bool enabled)

@@ -146,16 +146,21 @@ void SdlButtonList::clear()
 
 bool SdlButtonList::update()
 {
+	/* Best-effort across the whole list: a single button hitting a
+	 * transient draw failure (e.g. a texture/font hiccup) used to make this
+	 * return early, silently leaving every later button in the list
+	 * completely undrawn for that frame -- no background, no text. The
+	 * caller (SdlFloatbar::render()) ignores this return value already, so
+	 * there's no reason one bad button should blank out the rest; drawing
+	 * everything we can and reporting overall success/failure afterward is
+	 * strictly better. */
+	bool ok = true;
 	for (auto& btn : _list)
 	{
-		if (!btn->highlight(btn == _highlighted))
-			return false;
-		if (!btn->mouseover(btn == _mouseover))
-			return false;
-
-		if (!btn->update())
-			return false;
+		ok = btn->highlight(btn == _highlighted) && ok;
+		ok = btn->mouseover(btn == _mouseover) && ok;
+		ok = btn->update() && ok;
 	}
 
-	return true;
+	return ok;
 }
