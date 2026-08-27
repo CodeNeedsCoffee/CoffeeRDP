@@ -33,7 +33,7 @@
   </provides>
   <content_rating type="oars-1.1" />
   <releases>
-    <release version="0.1.0" date="2026-08-21">
+    <release version="0.1.1" date="2026-08-21">
       <description>
         <p>First packaged release: session client, quality presets, idle keep-alive, the in-session floatbar, persistent Entra ID login, and the GTK4 connection manager.</p>
       </description>

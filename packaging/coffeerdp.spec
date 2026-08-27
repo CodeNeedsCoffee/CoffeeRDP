@@ -1,5 +1,5 @@
 Name:           coffeerdp
-Version:        0.1.0
+Version:        0.1.1
 Release:        4%{?dist}
 Summary:        RDP client with durable Entra ID login, built on FreeRDP's SDL3 client
 
@@ -108,6 +108,9 @@ appstreamcli validate --no-net --pedantic \
 %{_datadir}/icons/hicolor/*/apps/com.codeneedscoffee.coffeerdp.manager.png
 
 %changelog
+* Wed Aug 26 2026 CodeNeedsCoffee <codeneedscoffee@gmail.com> - 0.1.1
+- Give CoffeeRDP a version bump 
+
 * Fri Aug 21 2026 CodeNeedsCoffee <codeneedscoffee@gmail.com> - 0.1.0-4
 - Give coffee-rdp-session a NoDisplay desktop entry matching its Wayland
   app_id/X11 WM_CLASS (com.codeneedscoffee.coffeerdp.session), reusing the

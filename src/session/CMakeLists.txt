@@ -64,7 +64,7 @@ set(SRCS
 
 set(WITH_WEBVIEW ON)
 set(SDL_CLIENT_BINARY_NAME "${MODULE_NAME}")
-set(FREERDP_VERSION_FULL "0.1.0")
+set(FREERDP_VERSION_FULL "0.1.1")
 set(GIT_REVISION "coffeerdp")
 set(VENDOR "CoffeeRDP")
 set(SDL_CLIENT_UUID "com.codeneedscoffee.coffeerdp.session")
