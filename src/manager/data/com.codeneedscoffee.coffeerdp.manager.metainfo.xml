@@ -33,6 +33,11 @@
   </provides>
   <content_rating type="oars-1.1" />
   <releases>
+    <release version="0.1.2" date="2026-08-31">
+      <description>
+        <p>Fixes clipboard image copy/paste in both directions, a crash on disconnect, and the floatbar popping up over unrelated content near the top of the window. Adds optional GPU-accelerated (VAAPI/NVDEC) H.264 decode.</p>
+      </description>
+    </release>
     <release version="0.1.1" date="2026-08-21">
       <description>
         <p>First packaged release: session client, quality presets, idle keep-alive, the in-session floatbar, persistent Entra ID login, and the GTK4 connection manager.</p>

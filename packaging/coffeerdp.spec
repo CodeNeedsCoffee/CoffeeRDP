@@ -1,6 +1,6 @@
 Name:           coffeerdp
-Version:        0.1.1
-Release:        5%{?dist}
+Version:        0.1.2
+Release:        1%{?dist}
 Summary:        RDP client with durable Entra ID login, built on FreeRDP's SDL3 client
 
 License:        Apache-2.0
@@ -109,6 +109,13 @@ appstreamcli validate --no-net --pedantic \
 %{_datadir}/coffeerdp/resources
 
 %changelog
+* Mon Aug 31 2026 CodeNeedsCoffee <codeneedscoffee@gmail.com> - 0.1.2-1
+- Version bump: clipboard image copy/paste fix (local<->remote CF_DIB/DIB format
+  resolution), fix SIGSEGV on disconnect (floatbar TTF_Font teardown ordering),
+  fix floatbar connect-time event handling and reveal-zone width (no longer
+  steals clicks outside its own footprint), add GPU (VAAPI/NVDEC) H.264 decode
+  with a /hw-decode:auto|off runtime toggle.
+
 * Mon Aug 31 2026 CodeNeedsCoffee <codeneedscoffee@gmail.com> - 0.1.1-5
 - Fix the in-session floatbar/dropdown rendering blank on every installed
   build: SDL_RESOURCE_ROOT was baked in as CMAKE_SOURCE_DIR/resources, an
