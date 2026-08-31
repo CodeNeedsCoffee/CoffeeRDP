@@ -127,6 +127,9 @@ bool sdl_push_user_event(Uint32 type, ...)
 		case SDL_EVENT_USER_CREATE_WINDOWS:
 			event->data1 = va_arg(ap, void*);
 			break;
+		case SDL_EVENT_USER_CONFIGURE_FLOATBAR:
+			event->data1 = va_arg(ap, void*);
+			break;
 		case SDL_EVENT_USER_WINDOW_FULLSCREEN:
 			event->data1 = va_arg(ap, void*);
 			event->code = va_arg(ap, int);

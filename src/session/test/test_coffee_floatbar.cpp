@@ -54,7 +54,7 @@ void check_reveal_on_hover()
 	CoffeeFloatbarState bar;
 	configureDefault(bar);
 
-	bar.noteMouseY(3); // inside the 10px reveal zone
+	bar.noteMouseMotion(400, 3); // inside the 10px reveal zone, x within the bar's footprint
 	int lastOffset = bar.offsetY();
 	int ticks = 0;
 	while (bar.tick())
@@ -78,14 +78,14 @@ void check_stays_open_while_moving_within_the_bar()
 	CoffeeFloatbarState bar;
 	configureDefault(bar);
 
-	bar.noteMouseY(3); // reveal it
+	bar.noteMouseMotion(400, 3); // reveal it
 	while (bar.tick())
 		;
 	expect(bar.offsetY() == 0, "precondition: fully shown");
 
 	// kBarHeight=28, kRevealZone=10 -- y=20 is within the bar but well
 	// outside the original narrow reveal strip.
-	bar.noteMouseY(20);
+	bar.noteMouseMotion(400, 20);
 	expect(!bar.tick(), "moving within the bar's own height must not start "
 	                    "retracting it, even though 20 > the reveal-zone strip");
 	expect(bar.offsetY() == 0, "stays fully shown while the pointer is anywhere in the bar");
@@ -96,9 +96,46 @@ void check_stays_open_while_moving_within_the_bar()
 	while (bar.tick())
 		;
 	expect(bar.offsetY() == -26, "precondition: retracted again");
-	bar.noteMouseY(20); // within the *shown* bar's height, but not the reveal strip
+	bar.noteMouseMotion(400, 20); // within the *shown* bar's height, but not the reveal strip
 	expect(!bar.tick(), "y=20 does not re-open an already-retracted bar (only the "
 	                    "narrow reveal-zone strip does)");
+}
+
+// Regression test for a real bug found via live session monitoring
+// (2026-08-31): the reveal/stay-open check only looked at Y, so hovering
+// near the top edge anywhere across the full window width -- not just over
+// the bar's own footprint -- triggered a reveal. That both cost an
+// unnecessary tick()/redraw on every such motion sample and could pop the
+// bar up over unrelated content (e.g. browser tabs) far from where the bar
+// actually sits.
+void check_reveal_requires_x_within_bar()
+{
+	CoffeeFloatbarState bar;
+	configureDefault(bar);
+
+	// Bar is centered at x=300..500 (see configureDefault's geometry
+	// comment). x=0 is inside the 10px reveal-zone Y band but nowhere near
+	// the bar's own horizontal footprint.
+	bar.noteMouseMotion(0, 3);
+	int ticks = 0;
+	while (bar.tick())
+	{
+		if (++ticks > 100)
+			break;
+	}
+	expect(bar.offsetY() == -26, "reveal-zone Y with x outside the bar's footprint "
+	                             "must not reveal it");
+
+	// Same Y, x now within the bar's footprint -- should reveal normally,
+	// confirming the fix narrows the trigger rather than breaking it.
+	bar.noteMouseMotion(400, 3);
+	ticks = 0;
+	while (bar.tick())
+	{
+		if (++ticks > 100)
+			break;
+	}
+	expect(bar.offsetY() == 0, "reveal-zone Y with x inside the bar's footprint still reveals it");
 }
 
 void check_retract_when_pointer_leaves()
@@ -106,7 +143,7 @@ void check_retract_when_pointer_leaves()
 	CoffeeFloatbarState bar;
 	configureDefault(bar);
 
-	bar.noteMouseY(3);
+	bar.noteMouseMotion(400, 3);
 	while (bar.tick())
 		; // reveal fully first
 	expect(bar.offsetY() == 0, "precondition: fully shown");
@@ -126,7 +163,7 @@ void check_pin_forces_shown()
 	CoffeeFloatbarState bar;
 	configureDefault(bar);
 
-	bar.noteMouseY(500); // far from the top edge
+	bar.noteMouseMotion(400, 500); // far from the top edge
 	expect(!bar.pinned(), "starts unpinned");
 
 	bool nowPinned = bar.togglePinned();
@@ -155,7 +192,7 @@ void check_force_shown_independent_of_pinned()
 	CoffeeFloatbarState bar;
 	configureDefault(bar);
 
-	bar.noteMouseY(500); // far from the top edge
+	bar.noteMouseMotion(400, 500); // far from the top edge
 	bar.setForceShown(true);
 
 	int ticks = 0;
@@ -237,7 +274,7 @@ void check_drag_forces_shown()
 {
 	CoffeeFloatbarState bar;
 	configureDefault(bar);
-	bar.noteMouseY(500); // pointer far from the top edge -- would normally retract
+	bar.noteMouseMotion(400, 500); // pointer far from the top edge -- would normally retract
 
 	bar.beginDrag(bar.offsetX());
 	int ticks = 0;
@@ -293,6 +330,7 @@ int main()
 {
 	check_initial_state();
 	check_reveal_on_hover();
+	check_reveal_requires_x_within_bar();
 	check_stays_open_while_moving_within_the_bar();
 	check_retract_when_pointer_leaves();
 	check_pin_forces_shown();

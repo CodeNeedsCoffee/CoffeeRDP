@@ -41,11 +41,13 @@
 #endif
 
 #include "coffee_quality.hpp"
+#include "coffee_hwdecode.hpp"
 
 static constexpr auto sdl_allow_screensaver = "sdl-allow-screensaver";
 static constexpr auto coffee_quality_arg = "quality";
 static constexpr auto coffee_idle_time_arg = "idle-keypress-time";
 static constexpr auto coffee_idle_combo_arg = "idle-keypress-combo";
+static constexpr auto coffee_hwdecode_arg = "hw-decode";
 
 SdlContext::SdlContext(rdpContext* context)
     : _context(context), _log(WLog_Get(CLIENT_TAG("SDL"))), _cursor(nullptr, sdl_Pointer_FreeCopy),
@@ -91,6 +93,11 @@ SdlContext::SdlContext(rdpContext* context)
 
 	_args.push_back({ coffee_idle_combo_arg, COMMAND_LINE_VALUE_REQUIRED, "<key+key+...>", "alt+tab",
 	                  nullptr, -1, nullptr, "Key combo to send for the idle keepalive" });
+
+	_args.push_back({ coffee_hwdecode_arg, COMMAND_LINE_VALUE_REQUIRED, "<auto|off>", "auto",
+	                  nullptr, -1, nullptr,
+	                  "GPU (VAAPI) H.264 decode: auto tries hardware and falls back to "
+	                  "software, off forces software decode" });
 
 	/* Deliberately NOT applying a default preset here: anything set on
 	 * `settings` before FreeRDP's own command-line/.rdp-file parsing runs
@@ -1874,6 +1881,23 @@ int SdlContext::argumentHandler(const COMMAND_LINE_ARGUMENT_A* arg, void* custom
 			            "/%s reached argumentHandler instead of being pre-applied in main() -- "
 			            "idle keep-alive may not be configured as expected",
 			            arg->Name);
+		}
+		else if (strcmp(arg->Name, coffee_hwdecode_arg) == 0)
+		{
+			/* Also normally unreachable, same reasoning as coffee_quality_arg
+			 * above -- main() strips /hw-decode: out of argv and applies it
+			 * via coffee_hwdecode_apply() before the parse call that would
+			 * reach this handler, since it has to run before the H.264
+			 * codec's first lazy init, not at settings-apply time. */
+			CoffeeHwDecode mode{};
+			if (!arg->Value || !coffee_hwdecode_parse(arg->Value, mode))
+			{
+				SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+				             "/hw-decode: unrecognized mode '%s', expected one of auto|off",
+				             arg->Value ? arg->Value : "(none)");
+				return -2;
+			}
+			coffee_hwdecode_apply(mode);
 		}
 	}
 	return 0;

@@ -79,6 +79,7 @@
 #include "sdl_context.hpp"
 #include "coffee_quality.hpp"
 #include "coffee_idle.hpp"
+#include "coffee_hwdecode.hpp"
 #include "coffee_rdp_file.hpp"
 #include "sdl_monitor.hpp"
 #include "sdl_pointer.hpp"
@@ -926,6 +927,36 @@ int main(int argc, char* argv[])
 		        return false;
 	        }),
 	    args.end());
+
+	/* /hw-decode: gets the same argv-stripping treatment as quality/idle
+	 * above, for the same reason (1) -- but unlike quality, and like idle,
+	 * it's applied immediately rather than deferred past the parse call:
+	 * coffee_hwdecode_apply() only sets an environment variable the H.264
+	 * codec reads on its own first (lazy) init, not an rdpSettings value
+	 * FreeRDP's own .rdp-file/CLI parsing could silently overwrite. Applying
+	 * it here, well before SDL_Init()/connect, is early enough. */
+	CoffeeHwDecode desiredHwDecode = CoffeeHwDecode::Auto;
+	args.erase(std::remove_if(args.begin(), args.end(),
+	                         [&](const char* a) {
+		                         if (!a)
+			                         return false;
+		                         for (const char* prefix : { "/hw-decode:", "+hw-decode:", "-hw-decode:" })
+		                         {
+			                         if (strncmp(a, prefix, strlen(prefix)) == 0)
+			                         {
+				                         const char* value = a + strlen(prefix);
+				                         if (!coffee_hwdecode_parse(value, desiredHwDecode))
+					                         SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+					                                     "'%s' is not a recognized hw-decode mode, "
+					                                     "expected auto|off, ignoring",
+					                                     value);
+				                         return true;
+			                         }
+		                         }
+		                         return false;
+	                         }),
+	           args.end());
+	coffee_hwdecode_apply(desiredHwDecode);
 
 	sdl->configureIdleKeepAlive(idleSeconds, idleCombo);
 

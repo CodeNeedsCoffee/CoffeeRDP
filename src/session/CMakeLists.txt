@@ -33,6 +33,10 @@ target_link_libraries(coffee-quality PUBLIC freerdp freerdp-client coffee-rdp-fi
 add_library(coffee-idle STATIC coffee_idle.cpp coffee_idle.hpp)
 target_link_libraries(coffee-idle PUBLIC coffee-rdp-file)
 
+# GPU (VAAPI) H.264 decode runtime toggle. No SDL/FreeRDP dependency at all --
+# it only sets an environment variable FreeRDP's own codec reads on first use.
+add_library(coffee-hwdecode STATIC coffee_hwdecode.cpp coffee_hwdecode.hpp)
+
 enable_testing()
 add_subdirectory(test)
 
@@ -85,6 +89,7 @@ target_link_libraries(${MODULE_NAME} PRIVATE
     sdl-common-prefs
     coffee-quality
     coffee-idle
+    coffee-hwdecode
     coffee-floatbar
     SDL3::SDL3
 )

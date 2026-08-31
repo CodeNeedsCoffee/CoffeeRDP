@@ -61,8 +61,9 @@ void CoffeeFloatbarState::setForceShown(bool force)
 	_forceShown = force;
 }
 
-void CoffeeFloatbarState::noteMouseY(int windowRelativeY)
+void CoffeeFloatbarState::noteMouseMotion(int windowRelativeX, int windowRelativeY)
 {
+	_lastMotionX = windowRelativeX;
 	_lastMotionY = windowRelativeY;
 }
 
@@ -72,7 +73,10 @@ void CoffeeFloatbarState::noteMouseLeft()
 	 * zone too (up to barHeightPx once shown, not just revealZonePx) --
 	 * "the pointer left the window" has to always mean "start retracting",
 	 * unlike an ordinary motion event elsewhere in the window. Same
-	 * sentinel convention as the "no motion yet" default. */
+	 * sentinel convention as the "no motion yet" default. _lastMotionX reset
+	 * isn't load-bearing here (the Y sentinel alone already fails tick()'s
+	 * check regardless of X), just kept consistent with it. */
+	_lastMotionX = 0;
 	_lastMotionY = 1'000'000;
 	_dragging = false;
 }
@@ -96,7 +100,17 @@ bool CoffeeFloatbarState::tick()
 	const bool alreadyShown = _offsetY > hiddenY;
 	const int stayOpenZone = alreadyShown ? _barHeightPx : _revealZonePx;
 
-	if (_pinned || _forceShown || _dragging || (_lastMotionY <= stayOpenZone))
+	/* Also bounded in X, to the bar's own footprint (same range
+	 * containsPoint() hit-tests against) -- otherwise *any* motion within
+	 * stayOpenZone of the top edge, anywhere across the full window width,
+	 * triggers a reveal/redraw and can pop the bar up over unrelated
+	 * content (e.g. browser tabs) the pointer was only passing near on its
+	 * way elsewhere. The peek sliver is only ever visible in this X range
+	 * to begin with, so this just matches the trigger to what's already
+	 * the only visible affordance for it. */
+	const bool inBarX = (_lastMotionX >= _offsetX) && (_lastMotionX < _offsetX + _barWidthPx);
+
+	if (_pinned || _forceShown || _dragging || ((_lastMotionY <= stayOpenZone) && inBarX))
 		_offsetY = std::min(0, _offsetY + _stepPx);
 	else
 		_offsetY = std::max(hiddenY, _offsetY - _stepPx);

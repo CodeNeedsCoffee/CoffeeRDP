@@ -75,8 +75,12 @@ class CoffeeFloatbarState
 	}
 
 	/** Call on every mouse-motion event delivered to the window the bar is
-	 *  attached to, with the window-relative (not RDP framebuffer) pointer Y. */
-	void noteMouseY(int windowRelativeY);
+	 *  attached to, with the window-relative (not RDP framebuffer) pointer
+	 *  position. Both axes matter: the reveal/stay-open test in tick() only
+	 *  triggers when the pointer is also within the bar's own horizontal
+	 *  footprint, not anywhere across the full window width -- see tick()'s
+	 *  doc comment. */
+	void noteMouseMotion(int windowRelativeX, int windowRelativeY);
 
 	/** Call when the pointer leaves the window entirely
 	 *  (SDL_EVENT_WINDOW_MOUSE_LEAVE) -- same effect as a motion event far
@@ -146,6 +150,7 @@ class CoffeeFloatbarState
 	int _stepPx = 1;
 	int _offsetY = 0;
 	int _offsetX = 0;
+	int _lastMotionX = 0;
 	int _lastMotionY = 1'000'000; // "away" until the first real motion event
 	bool _pinned = false;
 	bool _forceShown = false;

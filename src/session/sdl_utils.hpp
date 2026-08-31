@@ -38,6 +38,20 @@ enum
 {
 	SDL_EVENT_USER_UPDATE = SDL_EVENT_USER + 1,
 	SDL_EVENT_USER_CREATE_WINDOWS,
+	/* Must stay above SDL_EVENT_USER_RETRY_DIALOG: sdl_freerdp.cpp's sdl_run()
+	 * only pulls events in [SDL_EVENT_FIRST, SDL_EVENT_USER_RETRY_DIALOG]
+	 * off the queue via SDL_PeepEvents(). An event declared after that bound
+	 * gets pushed successfully (sdl_push_user_event() doesn't care about the
+	 * bound) but can then never be dequeued -- it sits in the SDL event
+	 * queue forever, which both permanently blocks whoever's waiting on it
+	 * (configureFloatbar()'s WaitForMultipleObjects(..., INFINITE)) and
+	 * makes SDL_WaitEventTimeout() at the top of that same loop return
+	 * immediately on every iteration instead of actually sleeping (an event
+	 * *is* pending, just not one this peep call will ever retrieve),
+	 * spinning the main thread at full CPU. Found exactly this way when
+	 * SDL_EVENT_USER_CONFIGURE_FLOATBAR was originally declared below
+	 * SDL_EVENT_USER_RETRY_DIALOG. */
+	SDL_EVENT_USER_CONFIGURE_FLOATBAR,
 	SDL_EVENT_USER_WINDOW_RESIZEABLE,
 	SDL_EVENT_USER_WINDOW_FULLSCREEN,
 	SDL_EVENT_USER_WINDOW_MINIMIZE,
@@ -51,7 +65,6 @@ enum
 	SDL_EVENT_USER_AUTH_DIALOG,
 	SDL_EVENT_USER_SCARD_DIALOG,
 	SDL_EVENT_USER_RETRY_DIALOG,
-	SDL_EVENT_USER_CONFIGURE_FLOATBAR,
 
 	SDL_EVENT_USER_CERT_RESULT,
 	SDL_EVENT_USER_SHOW_RESULT,

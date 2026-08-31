@@ -74,7 +74,7 @@ bool SdlFloatbar::handleMouseMotion(float windowRelativeX, float windowRelativeY
 	if (!_renderer)
 		return false;
 
-	_state.noteMouseY(static_cast<int>(windowRelativeY));
+	_state.noteMouseMotion(static_cast<int>(windowRelativeX), static_cast<int>(windowRelativeY));
 
 	if (_state.dragging())
 	{
