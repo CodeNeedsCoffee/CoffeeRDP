@@ -618,6 +618,17 @@ static const char* getCurrentImageMime()
 	return nullptr;
 }
 
+[[nodiscard]]
+static const char* getCurrentBitmapMime()
+{
+	for (auto m : s_mime_bitmap())
+	{
+		if (SDL_HasClipboardData(m))
+			return m;
+	}
+	return nullptr;
+}
+
 std::shared_ptr<BYTE> sdlClip::ReceiveFormatDataRequestHandle(
     sdlClip* clipboard, const CLIPRDR_FORMAT_DATA_REQUEST* formatDataRequest, uint32_t& len)
 {
@@ -657,7 +668,11 @@ std::shared_ptr<BYTE> sdlClip::ReceiveFormatDataRequestHandle(
 
 		case CF_DIB:
 		case CF_DIBV5:
-			mime = s_mime_bitmap().at(0);
+			mime = getCurrentBitmapMime();
+			if (!mime)
+				mime = getCurrentImageMime();
+			if (!mime)
+				return {};
 			localFormatId = ClipboardGetFormatId(clipboard->_system, mime);
 			break;
 
@@ -833,9 +848,9 @@ UINT sdlClip::ReceiveFormatDataResponse(CliprdrClientContext* context,
 							}
 						}
 					}
-					else if (name == s_type_HtmlFormat)
+					else
 					{
-						srcFormatId = ClipboardGetFormatId(clipboard->_system, s_type_HtmlFormat);
+						srcFormatId = ClipboardGetFormatId(clipboard->_system, name.c_str());
 					}
 				}
 			}
