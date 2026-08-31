@@ -151,6 +151,12 @@ void SdlContext::cleanup()
 	_windows.clear();
 	_dialog.destroy();
 	_primary.reset();
+	/* Releases every SdlButton (and with it, each shared_ptr<TTF_Font>)
+	 * before sdl_dialogs_uninit()/TTF_Quit() runs a few lines later in
+	 * main()'s cleanup ScopeGuard -- otherwise those fonts get closed via
+	 * TTF_CloseFont after FreeType is already torn down, when SdlContext
+	 * itself is destroyed at the true end of main()'s scope. */
+	_floatbar.detach();
 }
 
 bool SdlContext::shallAbort(bool ignoreDialogs)
