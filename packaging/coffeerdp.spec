@@ -1,6 +1,6 @@
 Name:           coffeerdp
 Version:        0.1.1
-Release:        4%{?dist}
+Release:        5%{?dist}
 Summary:        RDP client with durable Entra ID login, built on FreeRDP's SDL3 client
 
 License:        Apache-2.0
@@ -106,10 +106,20 @@ appstreamcli validate --no-net --pedantic \
 %{_datadir}/applications/com.codeneedscoffee.coffeerdp.session.desktop
 %{_datadir}/metainfo/com.codeneedscoffee.coffeerdp.manager.metainfo.xml
 %{_datadir}/icons/hicolor/*/apps/com.codeneedscoffee.coffeerdp.manager.png
+%{_datadir}/coffeerdp/resources
 
 %changelog
+* Mon Aug 31 2026 CodeNeedsCoffee <codeneedscoffee@gmail.com> - 0.1.1-5
+- Fix the in-session floatbar/dropdown rendering blank on every installed
+  build: SDL_RESOURCE_ROOT was baked in as CMAKE_SOURCE_DIR/resources, an
+  absolute path into the Copr mock chroot's throwaway builddir that no
+  longer exists once the build finishes, so every icon lookup failed at
+  runtime. Now installs resources/ to %{_datadir}/coffeerdp/resources and
+  checks that path first, falling back to the source tree for uninstalled
+  dev builds run in place.
+
 * Wed Aug 26 2026 CodeNeedsCoffee <codeneedscoffee@gmail.com> - 0.1.1
-- Give CoffeeRDP a version bump 
+- Give CoffeeRDP a version bump
 
 * Fri Aug 21 2026 CodeNeedsCoffee <codeneedscoffee@gmail.com> - 0.1.0-4
 - Give coffee-rdp-session a NoDisplay desktop entry matching its Wayland
