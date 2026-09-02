@@ -20,6 +20,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdlib>
 #include <tuple>
 
 #include <freerdp/scancode.h>
@@ -416,6 +417,16 @@ bool SdlContext::createWindows()
 	ScopeGuard guard1([&]() { _windowsCreatedEvent.set(); });
 
 	UINT32 windowCount = freerdp_settings_get_uint32(settings, FreeRDP_MonitorCount);
+
+	/* [coffee-diag] temporary session-summary line for the multi-monitor
+	 * VAAPI decode contention investigation -- WLOG_TRACE only, remove once
+	 * the investigation concludes. */
+	WLog_Print(getWLog(), WLOG_TRACE,
+	           "[coffee-diag] session start: monitors=%" PRIu32 " gfxH264=%d gfxAVC444=%d "
+	           "hwDecodeForcedOff=%d",
+	           windowCount, freerdp_settings_get_bool(settings, FreeRDP_GfxH264),
+	           freerdp_settings_get_bool(settings, FreeRDP_GfxAVC444),
+	           getenv("FREERDP_VAAPI_DEVICE") != nullptr);
 
 	Sint32 originX = 0;
 	Sint32 originY = 0;
