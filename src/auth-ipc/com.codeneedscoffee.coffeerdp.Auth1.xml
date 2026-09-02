@@ -20,10 +20,38 @@
     (see coffee-rdp-auth's ScheduleReveal). Blocks for as long as an actual
     interactive login takes: there is deliberately no client-side timeout
     here beyond what GDBus itself imposes when told to wait indefinitely.
+
+    `password`: resolved plaintext from a profile's 1Password reference
+    (coffee_profiles.hpp's onePasswordRef), or empty. When non-empty, the
+    helper best-effort autofills Microsoft's own password field once the
+    page loads and submits it; empty means "no reference configured (or
+    `op read` failed)", in which case the page behaves exactly as it did
+    before this existed: ordinary interactive login. A wrong password is
+    never retried automatically (see coffee_rdp_auth.cpp's tryAutofill),
+    only attempted once per request. Passed as a plain D-Bus argument
+    rather than embedded in `url` because this is the private peer-to-peer
+    socket (0700 dir, PLAN.md Phase 7.5) already used for the OAuth code
+    itself: no new exposure. The one-shot spawned path (webview_impl.cpp,
+    used when no resident helper is reachable) carries the equivalent value
+    via an env var instead of argv, since /proc/PID/cmdline is
+    world-readable on a stock install while /proc/PID/environ isn't.
+
+    `op_item_ref`: the profile's raw op://vault/item/field reference
+    (coffee_profiles.hpp's onePasswordRef), unresolved, or empty. Not
+    secret: this is the same reference already accepted as safe to keep
+    in plaintext in profiles.ini, but threaded the same env-var-not-argv
+    way as `password` for the spawned path anyway, for consistency rather
+    than special-casing it. Used to resolve the MFA/verification-code step
+    (see coffee_rdp_auth.cpp's resolveOtpCode() for the exact `op` command)
+    at the moment that field actually appears rather than up front like
+    `password`: a TOTP code expires in about 30 seconds, so resolving it
+    early risks submitting a stale one by the time the page gets there.
   -->
   <method name="RequestToken">
    <arg type="s" name="url" direction="in"/>
    <arg type="s" name="title" direction="in"/>
+   <arg type="s" name="password" direction="in"/>
+   <arg type="s" name="op_item_ref" direction="in"/>
    <arg type="s" name="code" direction="out"/>
   </method>
   <!--

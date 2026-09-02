@@ -77,6 +77,17 @@ struct CoffeeProfile
 	 *  through this struct. */
 	std::string rdpFile;
 
+	/** Optional 1Password secret reference (`op://vault/item/field`) for
+	 *  this profile's NLA/RDP password. Safe to store in plaintext --
+	 *  that's the whole point of 1Password's reference syntax, it names a
+	 *  secret's location rather than containing it. When set,
+	 *  coffee_rdp_manager.cpp's connectToProfile() points FREERDP_ASKPASS
+	 *  at coffee-rdp-op-askpass so `op read` resolves the password before
+	 *  the SDL credential dialog would otherwise need to ask (see
+	 *  sdl_authenticate_ex, src/session/dialogs/sdl_dialogs.cpp) -- doesn't
+	 *  apply to Entra ID/AAD sign-in, which never uses this field. */
+	std::string onePasswordRef;
+
 	/** Keys read from disk that this build doesn't know about, preserved
 	 *  verbatim on save so a newer build's fields survive an older build. */
 	std::map<std::string, std::string> unknownKeys;
@@ -125,6 +136,16 @@ class CoffeeProfileStore
 	/** Checks the invariants add()/update() enforce, without touching the
 	 *  store -- exposed so a UI can validate a form before committing. */
 	[[nodiscard]] static bool validate(const CoffeeProfile& profile, std::string& error);
+
+	/** Strips one matching pair of surrounding '"' or '\'' from a pasted
+	 *  1Password secret reference. 1Password's own "Copy Secret Reference"
+	 *  action wraps the value in double quotes (`"op://vault/item/field"`),
+	 *  which op:// itself rejects outright ("secret reference should start
+	 *  with 'op://'") -- stripping this at paste/save time means the field
+	 *  never has to be hand-edited after copying straight out of 1Password.
+	 *  Only ever removes one layer, and only when both ends match, so a
+	 *  reference that never had wrapping quotes is left untouched. */
+	[[nodiscard]] static std::string normalizeOnePasswordRef(const std::string& ref);
 
 	/** Builds the argv (excluding argv[0]) for launching
 	 *  `coffee-rdp-session` for this profile. Mirrors the CLI flags Phases

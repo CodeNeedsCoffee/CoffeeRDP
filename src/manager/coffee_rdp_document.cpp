@@ -89,6 +89,19 @@ constexpr const char* kDisableShortcuts = "disable shortcuts";
  * to be custom: FreeRDP's own .rdp file parser has no key for
  * IgnoreCertificate at all (confirmed against client/common/file.c). */
 constexpr const char* kIgnoreCertificateErrors = "ignore certificate errors";
+/* No standard .rdp equivalent (op:// secret references are a CoffeeRDP/
+ * 1Password concept, not something FreeRDP or mstsc know about), so this is
+ * custom by necessity like the keys above. Round-tripping it through a
+ * linked file matters even though the session itself never reads it back
+ * out: without this key, onRdpPathChanged() (coffee_rdp_manager.cpp) -- which
+ * repopulates the whole form from a linked file's own keys, exactly so
+ * quality/idle-keepalive/shortcuts/etc. round-trip -- would silently blank
+ * this field on every reopen of a linked profile's editor, and the next
+ * Save would then persist that blank over the real reference. Type `s`, not
+ * `i`, matching every other CoffeeRDP-custom key here (this one isn't
+ * scanned by coffee_rdp_file_scan_key() at all, but keeping the convention
+ * avoids a key that looks out of place next to its neighbors). */
+constexpr const char* kOpReference = "op reference";
 
 constexpr int kScreenModeFullscreen = 2;
 constexpr int kScreenModeWindowed = 1;
@@ -468,6 +481,9 @@ void coffee_rdp_document_to_profile(const CoffeeRdpDocument& doc, CoffeeProfile&
 
 	if (const auto ignoreCert = doc.getString(kIgnoreCertificateErrors))
 		profile.ignoreCertificateErrors = (*ignoreCert == "1");
+
+	if (const auto opRef = doc.getString(kOpReference))
+		profile.onePasswordRef = *opRef;
 }
 
 void coffee_rdp_document_from_profile(const CoffeeProfile& profile, CoffeeRdpDocument& doc)
@@ -556,4 +572,11 @@ void coffee_rdp_document_from_profile(const CoffeeProfile& profile, CoffeeRdpDoc
 	 * user turned it back off. */
 	if (profile.ignoreCertificateErrors || doc.has(kIgnoreCertificateErrors))
 		doc.setString(kIgnoreCertificateErrors, profile.ignoreCertificateErrors ? "1" : "0");
+
+	/* Empty means "not set" -- same reasoning as username/domain above:
+	 * remove the key rather than writing an empty value. */
+	if (profile.onePasswordRef.empty())
+		doc.remove(kOpReference);
+	else
+		doc.setString(kOpReference, profile.onePasswordRef);
 }

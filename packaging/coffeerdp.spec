@@ -54,6 +54,13 @@ BuildRequires:  appstream
 # no separate Requires needed beyond what the dependent libraries above
 # already pull in transitively.
 
+# coffee-rdp-op-askpass shells out to `op` (the 1Password CLI) when a
+# profile has a 1Password reference set, but only then -- profiles without
+# one never touch it, and the helper itself degrades to "no autofill"
+# rather than failing if `op` isn't on PATH. Recommends rather than
+# Requires: the whole feature is opt-in per profile.
+Recommends:     1password-cli
+
 %description
 CoffeeRDP is a minimal RDP client for Linux, built on FreeRDP's SDL3
 client with a GTK4 connection manager on top of it.
@@ -70,14 +77,17 @@ Features:
  * Selectable connection quality presets
  * A connection manager with saved profiles and in-place .rdp file editing
 
-This package installs three binaries: coffeerdp (the GTK4 connection
+This package installs four binaries: coffeerdp (the GTK4 connection
 manager -- the one with a desktop launcher), coffee-rdp-session (the SDL3
-session client it launches per connection), and coffee-rdp-auth (a
-WebKitGTK-based Entra ID sign-in helper). coffeerdp starts coffee-rdp-auth
-as a resident helper on first connect and keeps it running, over its own
-private connection, for as long as coffeerdp is open; closing the window
-offers to keep it running in the background (via the XDG Background
-portal) so that session survives past the window too.
+session client it launches per connection), coffee-rdp-auth (a
+WebKitGTK-based Entra ID sign-in helper), and coffee-rdp-op-askpass (a
+FREERDP_ASKPASS helper that resolves a profile's NLA/RDP password via the
+1Password CLI when the profile has a reference configured for it).
+coffeerdp starts coffee-rdp-auth as a resident helper on first connect and
+keeps it running, over its own private connection, for as long as
+coffeerdp is open; closing the window offers to keep it running in the
+background (via the XDG Background portal) so that session survives past
+the window too.
 
 %prep
 %autosetup -p1
@@ -102,6 +112,7 @@ appstreamcli validate --no-net --pedantic \
 %{_bindir}/coffeerdp
 %{_bindir}/coffee-rdp-session
 %{_bindir}/coffee-rdp-auth
+%{_bindir}/coffee-rdp-op-askpass
 %{_datadir}/applications/com.codeneedscoffee.coffeerdp.manager.desktop
 %{_datadir}/applications/com.codeneedscoffee.coffeerdp.session.desktop
 %{_datadir}/metainfo/com.codeneedscoffee.coffeerdp.manager.metainfo.xml

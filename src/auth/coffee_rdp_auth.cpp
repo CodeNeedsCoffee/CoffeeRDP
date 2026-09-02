@@ -41,6 +41,7 @@
 
 #include <gtk/gtk.h>
 #include <webkit/webkit.h>
+#include <jsc/jsc.h>
 #include <glib.h>
 #include <glib-unix.h>
 #include <gio/gio.h>
@@ -54,11 +55,13 @@
 #include <cstdlib>
 #include <cstring>
 #include <deque>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <vector>
 
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 namespace
@@ -135,12 +138,334 @@ std::string redirectSchemeOf(const std::string& authUrl)
 	return schemeOf(urlDecode(it->second));
 }
 
+struct OpVaultItem
+{
+	std::string vault;
+	std::string item;
+};
+
+/** Parses "op://vault/item/field" into vault + item (URL-decoded, same
+ *  decoder already used above for query params -- op:// references use
+ *  the same percent-encoding for a vault/item name containing spaces or
+ *  other special characters). The field segment is discarded: this is only
+ *  ever used to derive vault+item for `op item get ... --otp`, which
+ *  resolves an item's own primary one-time password regardless of which
+ *  specific field a password reference happened to point at (see
+ *  resolveOtpCode()). std::nullopt for anything not shaped like
+ *  op://vault/item/... at all. */
+std::optional<OpVaultItem> parseOpItemRef(const std::string& ref)
+{
+	constexpr const char* kPrefix = "op://";
+	if (ref.rfind(kPrefix, 0) != 0)
+		return std::nullopt;
+
+	const auto rest = ref.substr(std::strlen(kPrefix));
+	const auto firstSlash = rest.find('/');
+	if (firstSlash == std::string::npos)
+		return std::nullopt;
+	const auto secondSlash = rest.find('/', firstSlash + 1);
+	if (secondSlash == std::string::npos)
+		return std::nullopt;
+
+	OpVaultItem out;
+	out.vault = urlDecode(rest.substr(0, firstSlash));
+	out.item = urlDecode(rest.substr(firstSlash + 1, secondSlash - firstSlash - 1));
+	if (out.vault.empty() || out.item.empty())
+		return std::nullopt;
+	return out;
+}
+
 std::string stateDir()
 {
 	static std::string dir;
 	if (dir.empty())
 		dir = std::string(g_get_user_data_dir()) + "/coffeerdp";
 	return dir;
+}
+
+/* ---- AAD/AVD password autofill (best-effort, both modes). ------------- */
+
+std::string jsStringLiteral(const std::string& s)
+{
+	std::string out = "\"";
+	for (unsigned char c : s)
+	{
+		switch (c)
+		{
+			case '"':
+				out += "\\\"";
+				break;
+			case '\\':
+				out += "\\\\";
+				break;
+			case '\n':
+				out += "\\n";
+				break;
+			case '\r':
+				out += "\\r";
+				break;
+			case '\t':
+				out += "\\t";
+				break;
+			default:
+				if (c < 0x20)
+				{
+					char buf[8];
+					std::snprintf(buf, sizeof(buf), "\\u%04x", c);
+					out += buf;
+				}
+				else
+					out += static_cast<char>(c);
+		}
+	}
+	out += "\"";
+	return out;
+}
+
+/** How many times a fresh OTP code is resolved and tried, per request. A
+ *  wrong/stale TOTP code just fails harmlessly (Microsoft re-shows the same
+ *  field), unlike a wrong password -- so unlike passwordAttempted (a strict
+ *  one-shot, see AutofillState below), this is a bounded retry rather than
+ *  a single try. Still capped, so a genuinely broken reference doesn't
+ *  hammer `op`/Microsoft forever. */
+constexpr int kMaxOtpAttempts = 3;
+
+/** Runs `op item get <item> --vault <vault> --otp`, which resolves an
+ *  item's own *primary* one-time password -- the field belonging to the
+ *  login itself -- even when the item has several other OTP-type fields
+ *  for unrelated services (a real, observed shape: one Login item holding
+ *  five separate TOTP secrets, only one of which is "this" login's own).
+ *  That's why this takes vault+item rather than a specific field
+ *  reference: `op` already knows which one is primary, no guessing needed
+ *  here. Empty on any failure (op missing, item locked, no primary OTP on
+ *  this item, etc.) -- caller just doesn't fill/click anything, same
+ *  fallback contract as the password path.
+ *
+ *  fork/pipe/execlp/waitpid + close_range(): same shape and same reasoning
+ *  as sdl_webview.cpp's resolveOpPassword() and this project's other raw
+ *  fork() call sites -- no shell (nothing to quote/escape even though
+ *  vault/item come from a user-editable profile field), and inherited fds
+ *  closed before exec so `op`'s own desktop-app socket handshake doesn't
+ *  start with a table full of descriptors it has no use for. */
+std::string resolveOtpCode(const std::string& vault, const std::string& item)
+{
+	if (vault.empty() || item.empty())
+		return "";
+
+	int pipefd[2] = { -1, -1 };
+	if (pipe(pipefd) != 0)
+		return "";
+
+	pid_t pid = fork();
+	if (pid < 0)
+	{
+		close(pipefd[0]);
+		close(pipefd[1]);
+		return "";
+	}
+
+	if (pid == 0)
+	{
+		close(pipefd[0]);
+		dup2(pipefd[1], STDOUT_FILENO);
+		close(pipefd[1]);
+		close_range(3, ~0U, 0);
+		execlp("op", "op", "item", "get", item.c_str(), "--vault", vault.c_str(), "--otp",
+		      static_cast<char*>(nullptr));
+		_exit(127);
+	}
+
+	close(pipefd[1]);
+	std::string output;
+	char buf[4096];
+	ssize_t n = 0;
+	while ((n = read(pipefd[0], buf, sizeof(buf))) > 0)
+		output.append(buf, static_cast<size_t>(n));
+	close(pipefd[0]);
+
+	int status = 0;
+	waitpid(pid, &status, 0);
+	if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
+		return "";
+
+	while (!output.empty() && (output.back() == '\n' || output.back() == '\r'))
+		output.pop_back();
+	return output;
+}
+
+/** All state one AAD/AVD login request's autofill needs, across however
+ *  many load-changed events it takes to get through the flow. A single
+ *  instance lives for the duration of one request -- a namespace global in
+ *  one-shot mode (one request per process), embedded in ServerState in
+ *  serve mode (reset per request in startRequest(), since the WebView
+ *  itself outlives any individual request there). Passed by pointer as
+ *  evaluate_javascript()'s userData, so it has to live at a stable address
+ *  for as long as an async JS call might still be in flight -- both homes
+ *  satisfy that. */
+struct AutofillState
+{
+	std::string password;
+	bool passwordAttempted = false;
+	std::string otpVault;
+	std::string otpItem;
+	int otpAttempts = 0;
+	/* How many extra render-retries (see onAutofillRetryTimeout) have
+	 * already been scheduled for the *current* page. Reset implicitly
+	 * whenever the whole AutofillState is reset at request start; not
+	 * reset per-page, so a page that keeps re-rendering without ever
+	 * producing the field still gives up eventually rather than polling
+	 * forever across an entire multi-page flow. */
+	int renderRetries = 0;
+};
+
+/** Microsoft's newer sign-in pages render the actual form client-side,
+ *  after the WebView's own "load-changed"/FINISHED event -- confirmed both
+ *  live (a probe right at FINISHED saw only hidden scaffolding fields,
+ *  page title "Sign in to your account", no visible inputs yet) and by
+ *  existing Playwright/Selenium automation for this exact page, which
+ *  documents needing an explicit wait for #idTxtBx_SAOTCC_OTC to appear
+ *  rather than assuming it's there at page-load. This bounded, short-delay
+ *  re-probe is that wait, translated to WebKit's async
+ *  evaluate_javascript() rather than a blocking wait. */
+constexpr int kMaxRenderRetries = 6; // ~6 * 500ms = 3s of extra patience per page
+
+struct AutofillRetry
+{
+	WebKitWebView* webview;
+	AutofillState* state;
+};
+
+void tryAutofill(WebKitWebView* webview, AutofillState* state);
+
+gboolean onAutofillRetryTimeout(gpointer userData)
+{
+	auto* retry = static_cast<AutofillRetry*>(userData);
+	tryAutofill(retry->webview, retry->state);
+	delete retry;
+	return G_SOURCE_REMOVE;
+}
+
+/** Handles the result of tryAutofill()'s probe script. Only flips
+ *  `passwordAttempted` once the script itself confirms it found and filled
+ *  the password field -- not merely because tryAutofill() ran -- so a page
+ *  that hasn't reached that step yet doesn't burn the one attempt before
+ *  there was anything to fill. 'awaiting-otp' means the verification-code
+ *  field is present and empty but nothing was typed into it yet: resolving
+ *  a TOTP code is a synchronous `op` subprocess call, done here rather than
+ *  inline in the probe script, then filled via a second, separate
+ *  evaluate_javascript() call. */
+void onAutofillJsResult(GObject* source, GAsyncResult* result, gpointer userData)
+{
+	auto* state = static_cast<AutofillState*>(userData);
+	GError* error = nullptr;
+	JSCValue* value =
+	    webkit_web_view_evaluate_javascript_finish(WEBKIT_WEB_VIEW(source), result, &error);
+	if (error)
+	{
+		g_printerr("coffee-rdp-auth: autofill script failed to run: %s\n", error->message);
+		g_error_free(error);
+		return; // the script itself didn't run -- don't burn an attempt
+	}
+
+	g_autofree gchar* str =
+	    (value && jsc_value_is_string(value)) ? jsc_value_to_string(value) : nullptr;
+	g_printerr("coffee-rdp-auth: autofill script result: %s\n", str ? str : "(non-string)");
+
+	if (str && (std::strcmp(str, "filled-password") == 0))
+	{
+		state->passwordAttempted = true;
+	}
+	else if (str && (std::strcmp(str, "awaiting-otp") == 0))
+	{
+		state->otpAttempts++;
+		std::string otpCode = resolveOtpCode(state->otpVault, state->otpItem);
+		if (!otpCode.empty())
+		{
+			const std::string fillJs =
+			    "(function(){"
+			    "var o=document.querySelector('#idTxtBx_SAOTCC_OTC');"
+			    "if(o){o.value=" +
+			    jsStringLiteral(otpCode) +
+			    ";"
+			    "o.dispatchEvent(new Event('input',{bubbles:true}));"
+			    "var b=document.querySelector('#idSubmit_SAOTCC_Continue');if(b){b.click();}}"
+			    "})();";
+			webkit_web_view_evaluate_javascript(WEBKIT_WEB_VIEW(source), fillJs.c_str(), -1, nullptr,
+			                                    nullptr, nullptr, nullptr, nullptr);
+		}
+	}
+	else
+	{
+		/* No match yet on anything still worth trying -- most likely
+		 * Microsoft's own client-side JS hasn't rendered the actual form
+		 * yet (see kMaxRenderRetries' doc comment). Re-probe shortly
+		 * rather than giving up after a single check at load-FINISHED. */
+		const bool stillPending = (!state->password.empty() && !state->passwordAttempted) ||
+		                         (!state->otpVault.empty() && (state->otpAttempts < kMaxOtpAttempts));
+		if (stillPending && (state->renderRetries < kMaxRenderRetries))
+		{
+			state->renderRetries++;
+			g_timeout_add(500, onAutofillRetryTimeout,
+			             new AutofillRetry{ WEBKIT_WEB_VIEW(source), state });
+		}
+	}
+	if (value)
+		g_object_unref(value);
+}
+
+/** Best-effort AAD/AVD autofill: password, then (a page or two later) the
+ *  MFA verification-code step. Skips entirely if neither is configured for
+ *  this request -- ordinary, unmodified interactive login, no separate
+ *  fallback path needed beyond just not calling this. Which branches the
+ *  generated script even includes depends on current state (already
+ *  attempted the password once, already spent all the OTP attempts) rather
+ *  than tracking that in JS -- keeps each branch self-contained.
+ *
+ *  #i0116 (email), #i0118 (password), #idSIButton9 (Next/Sign in),
+ *  #idTxtBx_SAOTCC_OTC (verification code), #idSubmit_SAOTCC_Continue
+ *  (its Verify button) are Microsoft identity-platform's own long-standing
+ *  field/button IDs, the same ones enterprise RPA/browser-automation
+ *  tooling has relied on for years. Email is filled server-side already
+ *  (see with_login_hint() in sdl_webview.cpp, a login_hint URL param
+ *  Microsoft's own page honors natively) -- this only clicks Next if that
+ *  already produced a non-empty box, never types into it. Any page
+ *  matching none of these (a non-TOTP MFA method, "Stay signed in?", an
+ *  account-picker, Conditional Access, or Microsoft simply renaming these
+ *  IDs one day) is left completely alone. */
+void tryAutofill(WebKitWebView* webview, AutofillState* state)
+{
+	const bool tryPassword = !state->password.empty() && !state->passwordAttempted;
+	const bool tryOtp = !state->otpVault.empty() && (state->otpAttempts < kMaxOtpAttempts);
+	if (!tryPassword && !tryOtp)
+		return;
+
+	g_printerr("coffee-rdp-auth: running autofill script (password=%d otp=%d) against %s\n",
+	          tryPassword, tryOtp, webkit_web_view_get_uri(webview));
+
+	std::string js = "(function(){";
+	if (tryPassword)
+	{
+		js += "var p=document.querySelector('#i0118');"
+		     "if(p&&!p.value){p.value=" +
+		     jsStringLiteral(state->password) +
+		     ";"
+		     "p.dispatchEvent(new Event('input',{bubbles:true}));"
+		     "var b=document.querySelector('#idSIButton9');if(b){b.click();}"
+		     "return 'filled-password';}";
+	}
+	if (tryOtp)
+	{
+		js += "var o=document.querySelector('#idTxtBx_SAOTCC_OTC');"
+		     "if(o&&!o.value){return 'awaiting-otp';}";
+	}
+	js += "var e=document.querySelector('#i0116');"
+	     "if(e&&e.value){var b2=document.querySelector('#idSIButton9');"
+	     "if(b2){b2.click();}}"
+	     "return 'no-match';"
+	     "})();";
+
+	webkit_web_view_evaluate_javascript(webview, js.c_str(), -1, nullptr, nullptr, nullptr,
+	                                    onAutofillJsResult, state);
 }
 
 /* ---- One-shot mode: unchanged behavior, run once and exit. ------------ */
@@ -151,6 +476,11 @@ namespace oneshot
 std::string g_code;
 int g_exitCode = 1;
 GtkApplication* g_app = nullptr;
+/* Populated once at startup from COFFEE_RDP_AAD_PASSWORD / COFFEE_RDP_AAD_OP_REF
+ * (webview_impl.cpp's runViaSpawnedHelper sets these env vars in the child
+ * rather than passing them as argv positionals -- see that file's comment
+ * for why). Empty means no autofill for that piece. */
+AutofillState g_autofill;
 
 void finish(int exitCode, const std::string& code)
 {
@@ -204,6 +534,15 @@ gboolean onCloseRequest(GtkWindow*, gpointer)
 	return FALSE; // allow the close to proceed
 }
 
+void onLoadChanged(WebKitWebView* webview, WebKitLoadEvent event, gpointer)
+{
+	if (event == WEBKIT_LOAD_FINISHED)
+	{
+		g_autofill.renderRetries = 0; // fresh render-retry budget for this page
+		tryAutofill(webview, &g_autofill);
+	}
+}
+
 struct LaunchArgs
 {
 	const char* url;
@@ -242,10 +581,14 @@ void onActivate(GtkApplication* app, gpointer userData)
 
 	GtkWidget* webview =
 	    GTK_WIDGET(g_object_new(WEBKIT_TYPE_WEB_VIEW, "network-session", session, nullptr));
+	if (std::getenv("COFFEE_RDP_AUTH_DEBUG_INSPECTOR"))
+		webkit_settings_set_enable_developer_extras(
+		    webkit_web_view_get_settings(WEBKIT_WEB_VIEW(webview)), TRUE);
 
 	WebKitWebContext* webContext = webkit_web_view_get_context(WEBKIT_WEB_VIEW(webview));
 	webkit_web_context_register_uri_scheme(webContext, scheme.c_str(), onSchemeRequest, nullptr,
 	                                       nullptr);
+	g_signal_connect(webview, "load-changed", G_CALLBACK(onLoadChanged), nullptr);
 
 	gtk_window_set_child(GTK_WINDOW(window), webview);
 	webkit_web_view_load_uri(WEBKIT_WEB_VIEW(webview), authUrl);
@@ -255,6 +598,16 @@ void onActivate(GtkApplication* app, gpointer userData)
 int run(const char* url, const char* title)
 {
 	LaunchArgs launch{ url, title };
+	if (const char* pw = std::getenv("COFFEE_RDP_AAD_PASSWORD"))
+		g_autofill.password = pw;
+	if (const char* ref = std::getenv("COFFEE_RDP_AAD_OP_REF"))
+	{
+		if (auto parsed = parseOpItemRef(ref))
+		{
+			g_autofill.otpVault = parsed->vault;
+			g_autofill.otpItem = parsed->item;
+		}
+	}
 
 	GtkApplication* app = gtk_application_new("com.codeneedscoffee.coffeerdp.auth",
 	                                          G_APPLICATION_DEFAULT_FLAGS);
@@ -285,6 +638,8 @@ struct PendingRequest
 	GDBusMethodInvocation* invocation;
 	std::string url;
 	std::string title;
+	std::string password;
+	std::string opItemRef;
 };
 
 struct ServerState
@@ -301,6 +656,12 @@ struct ServerState
 	GDBusMethodInvocation* currentInvocation = nullptr;
 	guint revealTimerId = 0;
 	std::deque<PendingRequest> queue;
+
+	/* Current request's autofill state (see AutofillState) -- read by
+	 * onLoadChanged(), set in startRequest(), cleared in finishCurrent() so
+	 * a resolved secret doesn't linger in memory past the request it was
+	 * for. */
+	AutofillState autofill;
 };
 
 ServerState g_state;
@@ -325,6 +686,7 @@ void finishCurrent(int exitCode, const std::string& code)
 	GDBusMethodInvocation* invocation = g_state.currentInvocation;
 	g_state.currentSkeleton = nullptr;
 	g_state.currentInvocation = nullptr;
+	g_state.autofill = AutofillState{};
 	hideWindow();
 
 	if (invocation)
@@ -386,6 +748,16 @@ gboolean onCloseRequest(GtkWindow*, gpointer)
 	return TRUE; // don't let GTK destroy the window, it's reused
 }
 
+void onLoadChanged(WebKitWebView* webview, WebKitLoadEvent event, gpointer)
+{
+	if (event != WEBKIT_LOAD_FINISHED)
+		return;
+	if (!g_state.currentInvocation)
+		return; // stray event with no request in flight (e.g. the initial blank load)
+	g_state.autofill.renderRetries = 0; // fresh render-retry budget for this page
+	tryAutofill(webview, &g_state.autofill);
+}
+
 gboolean onRevealTimer(gpointer)
 {
 	g_state.revealTimerId = 0;
@@ -415,7 +787,16 @@ void ensureWindowAndWebView()
 
 	GtkWidget* webview =
 	    GTK_WIDGET(g_object_new(WEBKIT_TYPE_WEB_VIEW, "network-session", session, nullptr));
+	if (std::getenv("COFFEE_RDP_AUTH_DEBUG_INSPECTOR"))
+		webkit_settings_set_enable_developer_extras(
+		    webkit_web_view_get_settings(WEBKIT_WEB_VIEW(webview)), TRUE);
 	gtk_window_set_child(GTK_WINDOW(window), webview);
+	/* Connected once here rather than per-request: this WebView is reused
+	 * across the resident helper's whole lifetime (that's the entire point
+	 * of the resident-helper design), so the handler reads whichever
+	 * request is current from g_state at fire time instead of being
+	 * rewired per RequestToken call. */
+	g_signal_connect(webview, "load-changed", G_CALLBACK(onLoadChanged), nullptr);
 
 	g_state.window = GTK_WINDOW(window);
 	g_state.webview = WEBKIT_WEB_VIEW(webview);
@@ -424,6 +805,13 @@ void ensureWindowAndWebView()
 void startRequest(const PendingRequest& req)
 {
 	ensureWindowAndWebView();
+	g_state.autofill = AutofillState{};
+	g_state.autofill.password = req.password;
+	if (auto parsed = parseOpItemRef(req.opItemRef))
+	{
+		g_state.autofill.otpVault = parsed->vault;
+		g_state.autofill.otpItem = parsed->item;
+	}
 
 	std::string scheme = redirectSchemeOf(req.url);
 	if (scheme.empty())
@@ -465,9 +853,12 @@ void startNext()
 }
 
 gboolean onHandleRequestToken(CoffeeRdpAuth1* object, GDBusMethodInvocation* invocation,
-                              const gchar* url, const gchar* title, gpointer)
+                              const gchar* url, const gchar* title, const gchar* password,
+                              const gchar* op_item_ref, gpointer)
 {
-	PendingRequest req{ object, invocation, url ? url : "", title ? title : "" };
+	PendingRequest req{ object,       invocation,
+		                url ? url : "", title ? title : "",
+		                password ? password : "", op_item_ref ? op_item_ref : "" };
 
 	if (g_state.currentInvocation)
 	{

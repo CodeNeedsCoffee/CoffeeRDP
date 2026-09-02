@@ -60,6 +60,7 @@ CoffeeProfile sampleProfile()
 	p.fullscreen = true;
 	p.idleKeepAliveSeconds = 30;
 	p.idleKeepAliveCombo = "alt+tab";
+	p.onePasswordRef = "op://Private/CW NBR One Dev/password";
 	return p;
 }
 
@@ -122,6 +123,28 @@ void check_validation()
 	p = sampleProfile();
 	p.username = "bad\nuser";
 	expect(!CoffeeProfileStore::validate(p, err), "newline in a value field rejected");
+
+	p = sampleProfile();
+	p.onePasswordRef = "bad\nref";
+	expect(!CoffeeProfileStore::validate(p, err), "newline in the 1Password reference rejected");
+}
+
+void check_normalize_one_password_ref()
+{
+	expect(CoffeeProfileStore::normalizeOnePasswordRef("op://Employee/Crestwood/password") ==
+	           "op://Employee/Crestwood/password",
+	       "an unquoted reference is left untouched");
+	expect(CoffeeProfileStore::normalizeOnePasswordRef("\"op://Employee/Crestwood/password\"") ==
+	           "op://Employee/Crestwood/password",
+	       "1Password's own double-quoted 'Copy Secret Reference' output is unwrapped");
+	expect(CoffeeProfileStore::normalizeOnePasswordRef("'op://Employee/Crestwood/password'") ==
+	           "op://Employee/Crestwood/password",
+	       "single-quote wrapping is unwrapped too");
+	expect(CoffeeProfileStore::normalizeOnePasswordRef("  \"op://x/y/z\"  ") == "op://x/y/z",
+	       "surrounding whitespace from a paste is trimmed along with the quotes");
+	expect(CoffeeProfileStore::normalizeOnePasswordRef("") == "", "empty stays empty");
+	expect(CoffeeProfileStore::normalizeOnePasswordRef("\"unterminated") == "\"unterminated",
+	       "a lone quote on one side only is left alone rather than mangled");
 }
 
 void check_round_trip()
@@ -172,6 +195,8 @@ void check_round_trip()
 		expect(back->idleKeepAliveSeconds == 0,
 		       "idle keep-alive 0 round-trips -- must not fall back to the 30s default");
 		expect(back->idleKeepAliveCombo == "win+tab", "combo round-trips");
+		expect(back->onePasswordRef == "op://Private/CW NBR One Dev/password",
+		       "1Password reference round-trips");
 	}
 
 	const auto* other = reloaded.find("Second");
@@ -393,6 +418,7 @@ int main()
 {
 	check_add_and_find();
 	check_validation();
+	check_normalize_one_password_ref();
 	check_round_trip();
 	check_missing_file_is_not_an_error();
 	check_unknown_keys_preserved();

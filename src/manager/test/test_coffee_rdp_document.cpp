@@ -354,6 +354,35 @@ void check_empty_values_remove_keys()
 	expect(!doc.has("domain"), "clearing domain removes the key");
 }
 
+void check_op_reference_round_trips()
+{
+	// Not invented for a file that never had one.
+	CoffeeRdpDocument fresh;
+	CoffeeProfile p;
+	p.host = "h";
+	coffee_rdp_document_from_profile(p, fresh);
+	expect(!fresh.has("op reference"),
+	       "a profile with no 1Password reference does not add 'op reference' to a file that "
+	       "lacked it");
+
+	p.onePasswordRef = "op://Employee/Crestwood/password";
+	coffee_rdp_document_from_profile(p, fresh);
+	expect(fresh.getString("op reference").value_or("") == "op://Employee/Crestwood/password",
+	       "setting a reference writes 'op reference:s:op://...'");
+
+	CoffeeProfile readBack;
+	coffee_rdp_document_to_profile(fresh, readBack);
+	expect(readBack.onePasswordRef == "op://Employee/Crestwood/password",
+	       "op reference reads back from the file -- this is what keeps the editor from "
+	       "blanking a linked profile's reference on reopen (onRdpPathChanged reloads the "
+	       "whole form from the file)");
+
+	// Clearing it removes the key, same as username/domain.
+	p.onePasswordRef = "";
+	coffee_rdp_document_from_profile(p, fresh);
+	expect(!fresh.has("op reference"), "clearing the reference removes the key");
+}
+
 void check_coffeerdp_keys_use_string_type()
 {
 	CoffeeRdpDocument doc;
@@ -671,6 +700,7 @@ int main()
 	check_disable_shortcuts_round_trips();
 	check_ignore_certificate_errors_round_trips();
 	check_empty_values_remove_keys();
+	check_op_reference_round_trips();
 	check_coffeerdp_keys_use_string_type();
 	check_keepalive_zero_is_written();
 	check_round_trip_through_profile();

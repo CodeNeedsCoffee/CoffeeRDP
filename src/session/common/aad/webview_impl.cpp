@@ -24,6 +24,7 @@
 #include "webview_impl.hpp"
 
 #include <cerrno>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 
@@ -48,8 +49,9 @@ namespace
  *  the login itself fails/is cancelled, that's a real result, not a
  *  fallback case: returns false with code left empty, exactly like the
  *  one-shot path's own failure contract. */
-bool runViaResidentHelper(const std::string& title, const std::string& url, std::string& code,
-                          bool& helperReachable)
+bool runViaResidentHelper(const std::string& title, const std::string& url,
+                          const std::string& password, const std::string& opItemRef,
+                          std::string& code, bool& helperReachable)
 {
 	helperReachable = false;
 	std::string address = "unix:path=" + authIpcSocketPath();
@@ -82,8 +84,9 @@ bool runViaResidentHelper(const std::string& title, const std::string& url, std:
 	g_dbus_proxy_set_default_timeout(G_DBUS_PROXY(proxy), G_MAXINT);
 
 	gchar* outCode = nullptr;
-	gboolean rc = coffee_rdp_auth1_call_request_token_sync(proxy, url.c_str(), title.c_str(),
-	                                                        &outCode, nullptr, &error);
+	gboolean rc = coffee_rdp_auth1_call_request_token_sync(
+	    proxy, url.c_str(), title.c_str(), password.c_str(), opItemRef.c_str(), &outCode, nullptr,
+	    &error);
 	g_object_unref(proxy);
 	g_object_unref(connection);
 
@@ -143,7 +146,9 @@ std::string findAuthHelper()
 	return "coffee-rdp-auth";
 }
 
-bool runViaSpawnedHelper(const std::string& title, const std::string& url, std::string& code)
+bool runViaSpawnedHelper(const std::string& title, const std::string& url,
+                         const std::string& password, const std::string& opItemRef,
+                         std::string& code)
 {
 	auto helper = findAuthHelper();
 
@@ -171,6 +176,23 @@ bool runViaSpawnedHelper(const std::string& title, const std::string& url, std::
 		close(pipefd[0]);
 		dup2(pipefd[1], STDOUT_FILENO);
 		close(pipefd[1]);
+		/* Env var, not argv: /proc/PID/cmdline is world-readable on a stock
+		 * install (no hidepid=2), /proc/PID/environ isn't -- same reasoning
+		 * as COFFEE_RDP_OP_REF elsewhere. setenv() here only affects this
+		 * forked child, never the parent. */
+		if (!password.empty())
+			setenv("COFFEE_RDP_AAD_PASSWORD", password.c_str(), 1);
+		if (!opItemRef.empty())
+			setenv("COFFEE_RDP_AAD_OP_REF", opItemRef.c_str(), 1);
+		/* coffee-rdp-session routinely holds several hundred open fds by
+		 * connect time (GPU sync objects, the Wayland socket, etc., none
+		 * O_CLOEXEC -- confirmed via /proc/<pid>/fd on a live session);
+		 * close them before exec so coffee-rdp-auth (and, transitively,
+		 * WebKit) starts with a clean table instead of several hundred
+		 * inherited handles it has no use for. See sdl_webview.cpp's
+		 * resolveOpPassword() for the same fix and the reasoning that led
+		 * to it (a sibling raw fork() found this the hard way). */
+		close_range(3, ~0U, 0);
 		execlp(helper.c_str(), helper.c_str(), url.c_str(), title.c_str(),
 		      static_cast<char*>(nullptr));
 		_exit(127);
@@ -215,10 +237,11 @@ bool runViaSpawnedHelper(const std::string& title, const std::string& url, std::
 
 } // namespace
 
-bool webview_impl_run(const std::string& title, const std::string& url, std::string& code)
+bool webview_impl_run(const std::string& title, const std::string& url, const std::string& password,
+                      const std::string& opItemRef, std::string& code)
 {
 	bool helperReachable = false;
-	if (runViaResidentHelper(title, url, code, helperReachable))
+	if (runViaResidentHelper(title, url, password, opItemRef, code, helperReachable))
 		return true;
 	if (helperReachable)
 	{
@@ -228,5 +251,5 @@ bool webview_impl_run(const std::string& title, const std::string& url, std::str
 		return false;
 	}
 
-	return runViaSpawnedHelper(title, url, code);
+	return runViaSpawnedHelper(title, url, password, opItemRef, code);
 }

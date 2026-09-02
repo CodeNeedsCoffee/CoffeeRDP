@@ -147,7 +147,8 @@ bool CoffeeProfileStore::validate(const CoffeeProfile& profile, std::string& err
 	}
 
 	for (const auto* field : { &profile.host, &profile.username, &profile.domain, &profile.quality,
-		                       &profile.idleKeepAliveCombo, &profile.rdpFile })
+		                       &profile.idleKeepAliveCombo, &profile.rdpFile,
+		                       &profile.onePasswordRef })
 	{
 		if (field->find('\n') != std::string::npos || field->find('\r') != std::string::npos)
 		{
@@ -157,6 +158,14 @@ bool CoffeeProfileStore::validate(const CoffeeProfile& profile, std::string& err
 	}
 
 	return true;
+}
+
+std::string CoffeeProfileStore::normalizeOnePasswordRef(const std::string& ref)
+{
+	auto s = trim(ref);
+	if (s.size() >= 2 && (s.front() == '"' || s.front() == '\'') && s.back() == s.front())
+		s = s.substr(1, s.size() - 2);
+	return s;
 }
 
 bool CoffeeProfileStore::load(const std::string& path)
@@ -239,6 +248,8 @@ bool CoffeeProfileStore::load(const std::string& path)
 			current.idleKeepAliveCombo = value;
 		else if (key == "rdp_file")
 			current.rdpFile = value;
+		else if (key == "op_reference")
+			current.onePasswordRef = value;
 		else if (!key.empty())
 			current.unknownKeys[key] = value; // preserved on save, see header
 	}
@@ -281,6 +292,7 @@ bool CoffeeProfileStore::save(const std::string& path) const
 			out << "idle_keepalive_seconds = " << p.idleKeepAliveSeconds << "\n";
 			out << "idle_keepalive_combo = " << p.idleKeepAliveCombo << "\n";
 			out << "rdp_file = " << p.rdpFile << "\n";
+			out << "op_reference = " << p.onePasswordRef << "\n";
 			for (const auto& kv : p.unknownKeys)
 				out << kv.first << " = " << kv.second << "\n";
 		}

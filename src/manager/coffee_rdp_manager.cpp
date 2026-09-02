@@ -29,9 +29,12 @@
 #include <coffee_auth_ipc.hpp>
 
 #include <csignal>
+#include <cstring>
 #include <memory>
 #include <string>
 #include <vector>
+
+#include <sys/wait.h>
 
 #include "coffee_profiles.hpp"
 #include "coffee_rdp_document.hpp"
@@ -168,6 +171,74 @@ std::string authHelperBinaryPath()
 	return "";
 }
 
+constexpr const char* kOpAskpassBinaryName = "coffee-rdp-op-askpass";
+
+/** Same resolution order as sessionBinaryPath()/authHelperBinaryPath(), for
+ *  the FREERDP_ASKPASS helper backed by the 1Password CLI (see
+ *  connectToProfile() and coffee_rdp_op_askpass.cpp). Missing is not an
+ *  error here -- callers treat it as "no autofill available", not a reason
+ *  to block connecting. */
+std::string opAskpassBinaryPath()
+{
+	if (char* found = g_find_program_in_path(kOpAskpassBinaryName))
+	{
+		std::string path = found;
+		g_free(found);
+		return path;
+	}
+
+	char* self = g_file_read_link("/proc/self/exe", nullptr);
+	if (self)
+	{
+		gchar* dir = g_path_get_dirname(self);
+		gchar* sibling = g_build_filename(dir, "..", "op-askpass", kOpAskpassBinaryName, nullptr);
+		std::string candidate = sibling;
+		g_free(sibling);
+		g_free(dir);
+		g_free(self);
+
+		if (g_file_test(candidate.c_str(), G_FILE_TEST_IS_EXECUTABLE))
+			return candidate;
+	}
+
+	return "";
+}
+
+/** Best-effort: derives <same item>/username from a password-field op://
+ *  reference and resolves it via `op read`, for a profile that has a
+ *  1Password reference but no explicit Username set -- so a Login item's
+ *  own username field is used automatically rather than requiring it to
+ *  be typed into the profile separately. Empty on any failure (op
+ *  missing, wrong shape, item has no username field, etc.); callers treat
+ *  that exactly like "no reference configured", leaving the profile's own
+ *  (empty) username as-is. Synchronous: this runs once on the manager's
+ *  main thread when Connect is clicked, same trade-off as any other local
+ *  IO in that handler. */
+std::string resolveOnePasswordUsername(const std::string& passwordRef)
+{
+	const auto slash = passwordRef.find_last_of('/');
+	if ((slash == std::string::npos) || (slash < std::strlen("op://")))
+		return "";
+	const std::string usernameRef = passwordRef.substr(0, slash + 1) + "username";
+
+	gchar* argv[] = { const_cast<char*>("op"), const_cast<char*>("read"),
+		              const_cast<char*>("--no-newline"), const_cast<char*>(usernameRef.c_str()),
+		              nullptr };
+	gchar* out = nullptr;
+	gint status = 0;
+	GError* error = nullptr;
+	const gboolean ok = g_spawn_sync(nullptr, argv, nullptr, G_SPAWN_SEARCH_PATH, nullptr, nullptr,
+	                                 &out, nullptr, &status, &error);
+	if (error)
+		g_error_free(error);
+	if (!ok)
+		return "";
+
+	std::string result = out ? out : "";
+	g_free(out);
+	return (WIFEXITED(status) && (WEXITSTATUS(status) == 0)) ? result : "";
+}
+
 void onAuthHelperExited(GObject* source, GAsyncResult* result, gpointer data)
 {
 	auto* st = static_cast<AppState*>(data);
@@ -291,6 +362,22 @@ void connectToProfile(AppState* st, const CoffeeProfile& profile)
 {
 	ensureAuthHelperRunning(st);
 
+	/* A profile with a 1Password reference but no explicit Username: pull
+	 * the same item's own username field, so it doesn't have to be typed
+	 * into the profile separately (used for both NLA's /u: flag below and,
+	 * once the session reads it back off FreeRDP's own settings, the AAD
+	 * webview's login_hint -- see sdl_webview.cpp's with_login_hint(),
+	 * unchanged by this). Never written back to the profile/store: resolved
+	 * fresh on every connect so a rename in 1Password is picked up rather
+	 * than going stale. */
+	CoffeeProfile effective = profile;
+	if (effective.username.empty() && !effective.onePasswordRef.empty())
+	{
+		const auto derived = resolveOnePasswordUsername(effective.onePasswordRef);
+		if (!derived.empty())
+			effective.username = derived;
+	}
+
 	const auto binary = sessionBinaryPath();
 	if (binary.empty())
 	{
@@ -299,7 +386,7 @@ void connectToProfile(AppState* st, const CoffeeProfile& profile)
 		return;
 	}
 
-	const auto args = CoffeeProfileStore::sessionArgs(profile);
+	const auto args = CoffeeProfileStore::sessionArgs(effective);
 
 	std::vector<char*> argv;
 	argv.push_back(const_cast<char*>(binary.c_str()));
@@ -343,6 +430,23 @@ void connectToProfile(AppState* st, const CoffeeProfile& profile)
 	{
 		envp = g_environ_setenv(envp, "XDG_ACTIVATION_TOKEN", token.c_str(), TRUE);
 		envp = g_environ_setenv(envp, "DESKTOP_STARTUP_ID", token.c_str(), TRUE);
+	}
+
+	/* 1Password-backed password autofill (see coffee_profiles.hpp's
+	 * onePasswordRef doc comment): COFFEE_RDP_OP_REF carries the raw
+	 * op://... reference, FREERDP_ASKPASS points FreeRDP's own SSH_ASKPASS-
+	 * style hook (sdl_authenticate_ex, sdl_dialogs.cpp) at the helper that
+	 * resolves it. If the helper isn't installed, skip silently -- the
+	 * session falls back to its normal credential dialog, same as any
+	 * profile without a reference set. */
+	if (!effective.onePasswordRef.empty())
+	{
+		const auto askpass = opAskpassBinaryPath();
+		if (!askpass.empty())
+		{
+			envp = g_environ_setenv(envp, "COFFEE_RDP_OP_REF", effective.onePasswordRef.c_str(), TRUE);
+			envp = g_environ_setenv(envp, "FREERDP_ASKPASS", askpass.c_str(), TRUE);
+		}
 	}
 
 	GError* error = nullptr;
@@ -391,6 +495,7 @@ struct EditDialog
 	GtkWidget* port = nullptr;
 	GtkWidget* username = nullptr;
 	GtkWidget* domain = nullptr;
+	GtkWidget* onePasswordRef = nullptr;
 	GtkWidget* aadAuth = nullptr;
 	GtkWidget* disableShortcuts = nullptr;
 	GtkWidget* ignoreCertificateErrors = nullptr;
@@ -442,6 +547,7 @@ void populateFields(EditDialog* ed, const CoffeeProfile& p)
 	adw_spin_row_set_value(ADW_SPIN_ROW(ed->port), p.port);
 	gtk_editable_set_text(GTK_EDITABLE(ed->username), p.username.c_str());
 	gtk_editable_set_text(GTK_EDITABLE(ed->domain), p.domain.c_str());
+	gtk_editable_set_text(GTK_EDITABLE(ed->onePasswordRef), p.onePasswordRef.c_str());
 	adw_switch_row_set_active(ADW_SWITCH_ROW(ed->aadAuth), p.aadAuth);
 	adw_switch_row_set_active(ADW_SWITCH_ROW(ed->disableShortcuts), p.disableShortcuts);
 	adw_switch_row_set_active(ADW_SWITCH_ROW(ed->ignoreCertificateErrors), p.ignoreCertificateErrors);
@@ -525,6 +631,10 @@ void onEditSave(GtkButton*, gpointer data)
 	p.port = static_cast<unsigned>(adw_spin_row_get_value(ADW_SPIN_ROW(ed->port)));
 	p.username = entryText(ed->username);
 	p.domain = entryText(ed->domain);
+	/* 1Password's "Copy Secret Reference" wraps the value in double quotes,
+	 * which op:// itself rejects -- strip them here so a straight paste
+	 * works without hand-editing. */
+	p.onePasswordRef = CoffeeProfileStore::normalizeOnePasswordRef(entryText(ed->onePasswordRef));
 	p.aadAuth = adw_switch_row_get_active(ADW_SWITCH_ROW(ed->aadAuth));
 	p.disableShortcuts = adw_switch_row_get_active(ADW_SWITCH_ROW(ed->disableShortcuts));
 	p.ignoreCertificateErrors =
@@ -678,6 +788,17 @@ void presentEditDialog(AppState* st, const CoffeeProfile* existing,
 	    "man-in-the-middle attack, so only enable this for hosts you trust.",
 	    seed.ignoreCertificateErrors);
 	adw_preferences_page_add(ADW_PREFERENCES_PAGE(page), ADW_PREFERENCES_GROUP(connGroup));
+
+	auto* opGroup = adw_preferences_group_new();
+	adw_preferences_group_set_title(ADW_PREFERENCES_GROUP(opGroup), "1Password");
+	adw_preferences_group_set_description(
+	    ADW_PREFERENCES_GROUP(opGroup),
+	    "Optional. A secret reference (op://vault/item/field) for this profile's NLA/RDP "
+	    "password -- resolved via the 1Password CLI when connecting, skipping the credential "
+	    "prompt entirely if it succeeds. Leave blank to keep using that prompt. Doesn't apply "
+	    "to Entra ID sign-in above.");
+	ed->onePasswordRef = addEntryRow(opGroup, "Secret reference", seed.onePasswordRef);
+	adw_preferences_page_add(ADW_PREFERENCES_PAGE(page), ADW_PREFERENCES_GROUP(opGroup));
 
 	auto* displayGroup = adw_preferences_group_new();
 	adw_preferences_group_set_title(ADW_PREFERENCES_GROUP(displayGroup), "Display");
