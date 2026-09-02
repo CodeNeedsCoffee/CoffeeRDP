@@ -1,5 +1,5 @@
 Name:           coffeerdp
-Version:        0.1.2
+Version:        0.1.3
 Release:        1%{?dist}
 Summary:        RDP client with durable Entra ID login, built on FreeRDP's SDL3 client
 
@@ -120,6 +120,12 @@ appstreamcli validate --no-net --pedantic \
 %{_datadir}/coffeerdp/resources
 
 %changelog
+* Wed Sep 02 2026 CodeNeedsCoffee <codeneedscoffee@gmail.com> - 0.1.3-1
+- Add 1Password integration: NLA password autofill via
+  FREERDP_ASKPASS/coffee-rdp-op-askpass, AAD WebView password and MFA/OTP
+  autofill in coffee-rdp-auth, and shared-item username derivation when a
+  profile has no explicit username set.
+
 * Mon Aug 31 2026 CodeNeedsCoffee <codeneedscoffee@gmail.com> - 0.1.2-1
 - Version bump: clipboard image copy/paste fix (local<->remote CF_DIB/DIB format
   resolution), fix SIGSEGV on disconnect (floatbar TTF_Font teardown ordering),
