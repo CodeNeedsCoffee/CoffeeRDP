@@ -67,6 +67,14 @@ BuildRequires:  pkgconfig(sso-mib)
 BuildRequires:  pkgconfig(wayland-client)
 BuildRequires:  pkgconfig(wayland-scanner)
 BuildRequires:  pkgconfig(xkbcommon)
+# WITH_FFMPEG/WITH_VIDEO_FFMPEG are forced ON in the top-level CMakeLists.txt
+# (the flag set validated during the multimon/quality-preset crash
+# investigation) so that WITH_VAAPI -- hardware H.264 decode -- can be ON at
+# all; FreeRDP's own CMake makes WITH_VAAPI a cmake_dependent_option() on
+# WITH_VIDEO_FFMPEG. Fedora's own repos can't carry ffmpeg-devel (patent/
+# licensing), so this COPR project's chroot needs RPM Fusion Free enabled as
+# an external repo (Project Settings) for this to resolve.
+BuildRequires:  ffmpeg-devel
 BuildRequires:  zlib-devel
 BuildRequires:  SDL3-devel
 BuildRequires:  SDL3_ttf-devel
