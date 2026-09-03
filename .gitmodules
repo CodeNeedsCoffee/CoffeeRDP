@@ -1,0 +1,4 @@
+[submodule "vendor/freerdp"]
+	path = vendor/freerdp
+	url = https://github.com/CodeNeedsCoffee/FreeRDP.git
+	branch = coffeerdp-patches

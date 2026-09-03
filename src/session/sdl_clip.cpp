@@ -363,6 +363,7 @@ void sdlClip::clearServerFormats()
 	_serverFormats.clear();
 	_cache_data.clear();
 	cliprdr_file_context_clear(_file);
+	++_serverFormatGeneration;
 }
 
 UINT sdlClip::SendFormatListResponse(BOOL status)
@@ -441,10 +442,36 @@ uint32_t sdlClip::serverIdForMime(const std::string& mime)
 			return format.formatId();
 	}
 
-	if (mime_is_image(mime))
+	/* Standard predefined formats (CF_DIB, CF_UNICODETEXT, ...) are plain
+	 * numeric IDs on the wire with no name, so the named-format loop above
+	 * can never confirm the server actually offers one -- it only rules
+	 * out named/registered formats. Previously this fell through to
+	 * guessing CF_UNICODETEXT/CF_DIB unconditionally for any text/image
+	 * mime request, even when the server's format list was e.g. a plain
+	 * file copy with no text representation at all, producing a doomed
+	 * ClientFormatDataRequest the server always fails. Only guess a
+	 * standard format ID if the server's list genuinely includes it. */
+	auto hasFormatId = [this](uint32_t id)
+	{
+		for (auto& format : _serverFormats)
+		{
+			if (format.formatId() == id)
+				return true;
+		}
+		return false;
+	};
+
+	if (mime_is_image(mime) && hasFormatId(CF_DIB))
 		return CF_DIB;
 	if (mime_is_text(mime))
-		return CF_UNICODETEXT;
+	{
+		if (hasFormatId(CF_UNICODETEXT))
+			return CF_UNICODETEXT;
+		if (hasFormatId(CF_TEXT))
+			return CF_TEXT;
+		if (hasFormatId(CF_OEMTEXT))
+			return CF_OEMTEXT;
+	}
 
 	return 0;
 }
@@ -888,6 +915,7 @@ const void* sdlClip::ClipDataCb(void* userdata, const char* mime_type, size_t* s
 	if (mime_is_text(mime_type))
 		mime_type = "text/plain";
 
+	uint32_t formatID = 0;
 	{
 		ClipboardLockGuard systemlock(clip->_system);
 		std::scoped_lock lock(clip->_lock);
@@ -900,7 +928,7 @@ const void* sdlClip::ClipDataCb(void* userdata, const char* mime_type, size_t* s
 			return cache->second.ptr.get();
 		}
 
-		auto formatID = clip->serverIdForMime(mime_type);
+		formatID = clip->serverIdForMime(mime_type);
 
 		/* Can we convert the data from existing formats in the clibpard? */
 		uint32_t fsize = 0;
@@ -919,14 +947,42 @@ const void* sdlClip::ClipDataCb(void* userdata, const char* mime_type, size_t* s
 			}
 		}
 
-		WLog_Print(clip->_log, WLOG_DEBUG, "requesting format %s [%s 0x%08" PRIx32 "]", mime_type,
-		           ClipboardGetFormatName(clip->_system, formatID), formatID);
-		if (clip->SendDataRequest(formatID, mime_type))
+		if (formatID == 0)
+		{
+			/* No server format backs this mime type (e.g. a text/plain
+			 * request when the server's clipboard only has a file) --
+			 * skip the request entirely rather than asking the server for
+			 * a format it never advertised and always fails. */
 			return nullptr;
+		}
 	}
-	{
-		HANDLE hdl[2] = { freerdp_abort_event(clip->_sdl->context()), clip->_event };
 
+	/* Windows Explorer can rebroadcast a file's ServerFormatList many times
+	 * in quick succession right after a copy (confirmed live: 12 broadcasts
+	 * in 24s for one file). A request whose round trip lands mid-churn
+	 * routinely comes back CB_RESPONSE_FAIL even though nothing is actually
+	 * wrong -- the very next attempt after the churn settles succeeds
+	 * cleanly. Retry a bounded few times, but only for file mimetypes (the
+	 * only case observed) and only while no newer format list has
+	 * superseded the one this request targets, so a genuinely stale
+	 * request isn't retried pointlessly. */
+	const bool retryable = mime_is_file(mime_type);
+	const int maxAttempts = retryable ? 3 : 1;
+
+	for (int attempt = 1; attempt <= maxAttempts; attempt++)
+	{
+		const uint64_t generation = clip->_serverFormatGeneration;
+
+		{
+			ClipboardLockGuard systemlock(clip->_system);
+			std::scoped_lock lock(clip->_lock);
+			WLog_Print(clip->_log, WLOG_DEBUG, "requesting format %s [%s 0x%08" PRIx32 "]",
+			           mime_type, ClipboardGetFormatName(clip->_system, formatID), formatID);
+			if (clip->SendDataRequest(formatID, mime_type))
+				return nullptr;
+		}
+
+		HANDLE hdl[2] = { freerdp_abort_event(clip->_sdl->context()), clip->_event };
 		DWORD status = WaitForMultipleObjects(ARRAYSIZE(hdl), hdl, FALSE, 10 * 1000);
 
 		if (status != WAIT_OBJECT_0 + 1)
@@ -940,9 +996,7 @@ const void* sdlClip::ClipDataCb(void* userdata, const char* mime_type, size_t* s
 
 			return nullptr;
 		}
-	}
 
-	{
 		ClipboardLockGuard systemlock(clip->_system);
 		std::scoped_lock lock(clip->_lock);
 		auto request = clip->_request_queue.front();
@@ -953,8 +1007,8 @@ const void* sdlClip::ClipDataCb(void* userdata, const char* mime_type, size_t* s
 
 		if (request.success())
 		{
-			auto formatID = ClipboardRegisterFormat(clip->_system, mime_type);
-			auto data = ClipboardGetData(clip->_system, formatID, &len);
+			auto rformatID = ClipboardRegisterFormat(clip->_system, mime_type);
+			auto data = ClipboardGetData(clip->_system, rformatID, &len);
 			if (!data)
 			{
 				WLog_Print(clip->_log, WLOG_ERROR, "error retrieving clipboard data");
@@ -967,8 +1021,16 @@ const void* sdlClip::ClipDataCb(void* userdata, const char* mime_type, size_t* s
 			return ptr.get();
 		}
 
-		return nullptr;
+		if (!retryable || (attempt >= maxAttempts) || (generation != clip->_serverFormatGeneration))
+			return nullptr;
+
+		WLog_Print(clip->_log, WLOG_DEBUG,
+		           "clipboard data request for %s failed, retrying (%d/%d)", mime_type,
+		           attempt + 1, maxAttempts);
+		Sleep(150);
 	}
+
+	return nullptr;
 }
 
 void sdlClip::ClipCleanCb(void* userdata)

@@ -13,6 +13,8 @@ on:
     paths:
       - "src/**"
       - "resources/**"
+      - "vendor/**"
+      - ".gitmodules"
       - "CMakeLists.txt"
       - "packaging/**"
       - ".copr/**"
@@ -21,6 +23,8 @@ on:
     paths:
       - "src/**"
       - "resources/**"
+      - "vendor/**"
+      - ".gitmodules"
       - "CMakeLists.txt"
       - "packaging/**"
       - ".copr/**"
@@ -38,6 +42,10 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0 # .copr/Makefile's `git archive HEAD` needs real history, not a shallow clone
+          submodules: recursive # vendor/freerdp (FREERDP_VENDORING.md) -- .copr/Makefile also runs
+          # its own `git submodule update --init --recursive` before archiving, so this isn't
+          # strictly required, but it's what makes `git status`/local commands in later steps see
+          # the submodule as populated too, matching a normal contributor checkout.
 
       - name: Install RPM build tooling
         run: dnf -y install rpm-build rpmdevtools dnf-plugins-core

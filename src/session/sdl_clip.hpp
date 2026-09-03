@@ -140,6 +140,11 @@ class sdlClip
 	Uint64 _last_timestamp = 0;
 
 	std::vector<CliprdrFormat> _serverFormats;
+	/* Bumped every time _serverFormats is rebuilt (new/cleared server or
+	 * client format list). Lets ClipDataCb tell a genuinely stale request
+	 * apart from one that failed mid a same-list retry -- see its retry
+	 * loop. */
+	std::atomic<uint64_t> _serverFormatGeneration{ 0 };
 	CriticalSection _lock;
 
 	std::queue<ClipRequest> _request_queue;

@@ -9,7 +9,8 @@ pkg_check_modules(GIO REQUIRED IMPORTED_TARGET gio-2.0 gio-unix-2.0)
 pkg_check_modules(LIBPORTAL REQUIRED IMPORTED_TARGET libportal-gtk4)
 # Headers only -- coffee-rdp-document uses FreeRDP's CONNECTION_TYPE_*
 # constants so they can't drift from the library we build against.
-find_package(FreeRDP 3 REQUIRED)
+# The FreeRDP target itself comes from the vendored add_subdirectory() in
+# the top-level CMakeLists.txt, not find_package() -- see the comment there.
 
 # Profile model + INI store. No GTK dependency at all -- same reasoning as
 # coffee-quality/coffee-idle/coffee-floatbar in src/session: the load/save
@@ -32,6 +33,15 @@ target_link_libraries(${MODULE_NAME} PRIVATE coffee-profiles coffee-rdp-document
                                             coffee-auth-ipc)
 
 install(TARGETS ${MODULE_NAME} DESTINATION ${CMAKE_INSTALL_PREFIX}/bin)
+
+# Vendored freerdp/winpr install to a private, coffeerdp-owned lib
+# directory, not the system libdir -- see the COFFEERDP_VENDOR_LIBDIR
+# comment in the top-level CMakeLists.txt. This binary installs to bin/,
+# so it's one level up from there.
+set_target_properties(${MODULE_NAME} PROPERTIES
+    INSTALL_RPATH "$ORIGIN/../${COFFEERDP_VENDOR_LIBDIR}"
+    BUILD_WITH_INSTALL_RPATH FALSE
+)
 
 # Desktop entry + icon (PLAN.md Phase 7.4). Icon= in the .desktop file names
 # the icon by its hicolor theme id ("com.codeneedscoffee.coffeerdp.manager"),

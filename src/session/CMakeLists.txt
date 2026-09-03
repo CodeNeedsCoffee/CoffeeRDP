@@ -3,9 +3,10 @@ set(MODULE_NAME "coffee-rdp-session")
 find_package(SDL3 REQUIRED)
 find_package(SDL3_ttf REQUIRED)
 find_package(Threads REQUIRED)
-find_package(FreeRDP 3 REQUIRED)
-find_package(FreeRDP-Client 3 REQUIRED)
-find_package(WinPR 3 REQUIRED)
+# FreeRDP/FreeRDP-Client/WinPR come from the vendored add_subdirectory()
+# in the top-level CMakeLists.txt, not find_package() -- see the comment
+# there. The targets (freerdp, freerdp-client, winpr) are the same names
+# either way, so nothing below this line needs to change.
 
 # Floatbar slide/reveal/pin state machine. No SDL/FreeRDP dependency at all
 # -- the actual rendering lives in dialogs/sdl_floatbar.cpp, which links this.
@@ -92,6 +93,15 @@ target_link_libraries(${MODULE_NAME} PRIVATE
     coffee-hwdecode
     coffee-floatbar
     SDL3::SDL3
+)
+
+# Vendored freerdp/freerdp-client/winpr install to a private,
+# coffeerdp-owned lib directory, not the system libdir -- see the
+# COFFEERDP_VENDOR_LIBDIR comment in the top-level CMakeLists.txt. This
+# binary installs to bin/, so it's one level up from there.
+set_target_properties(${MODULE_NAME} PROPERTIES
+    INSTALL_RPATH "$ORIGIN/../${COFFEERDP_VENDOR_LIBDIR}"
+    BUILD_WITH_INSTALL_RPATH FALSE
 )
 
 install(TARGETS ${MODULE_NAME} DESTINATION ${CMAKE_INSTALL_PREFIX}/bin)
