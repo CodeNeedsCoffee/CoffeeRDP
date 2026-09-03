@@ -18,9 +18,12 @@ Case matters on the first command: Copr project names aren't normalized, and
 The first command adds the repository; the second installs `coffeerdp`
 (the connection manager, with the desktop launcher) along with
 `coffee-rdp-session` and `coffee-rdp-auth`, the two helper binaries it
-launches per connection. Everything else the package needs (SDL3, GTK4,
-libadwaita, WebKitGTK, FreeRDP 3, libportal-gtk4) is already in Fedora's
-own repositories, so nothing beyond enabling the Copr repo is required.
+launches per connection. FreeRDP itself is bundled into the package (built
+from a patched fork, see `FREERDP_VENDORING.md`) rather than installed as a
+separate Fedora package, so it can't drift out of sync or conflict with a
+system FreeRDP install; everything else the package needs (SDL3, GTK4,
+libadwaita, WebKitGTK, libportal-gtk4) is already in Fedora's own
+repositories, so nothing beyond enabling the Copr repo is required.
 
 ## Finding it
 

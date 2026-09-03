@@ -441,10 +441,36 @@ uint32_t sdlClip::serverIdForMime(const std::string& mime)
 			return format.formatId();
 	}
 
-	if (mime_is_image(mime))
+	/* Standard predefined formats (CF_DIB, CF_UNICODETEXT, ...) are plain
+	 * numeric IDs on the wire with no name, so the named-format loop above
+	 * can never confirm the server actually offers one -- it only rules
+	 * out named/registered formats. Previously this fell through to
+	 * guessing CF_UNICODETEXT/CF_DIB unconditionally for any text/image
+	 * mime request, even when the server's format list was e.g. a plain
+	 * file copy with no text representation at all, producing a doomed
+	 * ClientFormatDataRequest the server always fails. Only guess a
+	 * standard format ID if the server's list genuinely includes it. */
+	auto hasFormatId = [this](uint32_t id)
+	{
+		for (auto& format : _serverFormats)
+		{
+			if (format.formatId() == id)
+				return true;
+		}
+		return false;
+	};
+
+	if (mime_is_image(mime) && hasFormatId(CF_DIB))
 		return CF_DIB;
 	if (mime_is_text(mime))
-		return CF_UNICODETEXT;
+	{
+		if (hasFormatId(CF_UNICODETEXT))
+			return CF_UNICODETEXT;
+		if (hasFormatId(CF_TEXT))
+			return CF_TEXT;
+		if (hasFormatId(CF_OEMTEXT))
+			return CF_OEMTEXT;
+	}
 
 	return 0;
 }
@@ -917,6 +943,15 @@ const void* sdlClip::ClipDataCb(void* userdata, const char* mime_type, size_t* s
 				*size = fcache->second.size;
 				return fcache->second.ptr.get();
 			}
+		}
+
+		if (formatID == 0)
+		{
+			/* No server format backs this mime type (e.g. a text/plain
+			 * request when the server's clipboard only has a file) --
+			 * skip the request entirely rather than asking the server for
+			 * a format it never advertised and always fails. */
+			return nullptr;
 		}
 
 		WLog_Print(clip->_log, WLOG_DEBUG, "requesting format %s [%s 0x%08" PRIx32 "]", mime_type,

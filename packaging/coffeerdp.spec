@@ -13,23 +13,61 @@ BuildRequires:  cmake
 BuildRequires:  ninja-build
 BuildRequires:  gcc-c++
 BuildRequires:  pkgconfig
-# freerdp3.pc / freerdp-client3.pc -- the Fedora package predates the
-# FreeRDP-3-specific naming the upstream .pc files themselves use, hence the
-# mismatch between this BuildRequires and the "3" everywhere else here.
-BuildRequires:  freerdp-devel
-BuildRequires:  libwinpr-devel
-# Not a compile-time dependency at all, but a configure-time one: WinPR's
-# installed CMake config (/usr/lib64/cmake/WinPR3/WinPRTargets.cmake, pulled
-# in by FreeRDPConfig.cmake -> find_dependency(WinPR), which our
-# src/session/CMakeLists.txt's find_package(FreeRDP 3) reaches) declares an
-# IMPORTED target for the winpr-makecert *binary* and hard-fails configure if
-# the file is missing. That binary ships in the main `freerdp` package, while
-# freerdp-devel only requires `freerdp-libs`, so a clean chroot has the CMake
-# config but not the executable it points at. Invisible on a dev box (where
-# `freerdp` is installed anyway) and it's exactly what broke Copr build
-# 10889775 on all three chroots. Requiring the path rather than the package
-# keeps this correct if Fedora ever moves the WinPR tools elsewhere.
-BuildRequires:  /usr/bin/winpr-makecert
+# FreeRDP is vendored in-tree (vendor/freerdp, a git submodule -- see
+# FREERDP_VENDORING.md) and built as part of this package via
+# add_subdirectory() rather than linked against the system freerdp-devel/
+# libwinpr-devel packages. That means users get our FreeRDP fixes without a
+# second, differently-patched FreeRDP install, but it also means *this spec*
+# needs FreeRDP's own build dependencies instead. The list below is FreeRDP
+# 3.30's build deps (per its own Fedora packaging) trimmed to what our
+# client-only CMake flag set in the top-level CMakeLists.txt actually
+# builds: no BuildRequires for anything gated behind WITH_SERVER/
+# WITH_SHADOW/WITH_PROXY/WITH_SAMPLE/WITH_CLIENT_SDL3 (all OFF -- the SDL3
+# client is CoffeeRDP's own, not FreeRDP's bundled one) or CHANNEL_URBDRC
+# (USB redirection, also OFF -- untested/undocumented feature not worth the
+# libusb dependency). SDL3(-ttf)-devel are already required above for
+# CoffeeRDP's own client, so they aren't repeated here even though FreeRDP's
+# own CMake would otherwise ask for them too.
+BuildRequires:  alsa-lib-devel
+BuildRequires:  cmake(json-c)
+BuildRequires:  uriparser-devel
+BuildRequires:  cups-devel
+BuildRequires:  gsm-devel
+BuildRequires:  lame-devel
+BuildRequires:  libicu-devel
+BuildRequires:  libjpeg-turbo-devel
+BuildRequires:  turbojpeg-devel
+BuildRequires:  libX11-devel
+BuildRequires:  libXcursor-devel
+BuildRequires:  libXdamage-devel
+BuildRequires:  libXext-devel
+BuildRequires:  libXi-devel
+BuildRequires:  libXinerama-devel
+BuildRequires:  libxkbfile-devel
+BuildRequires:  libXrandr-devel
+BuildRequires:  libXtst-devel
+BuildRequires:  libXv-devel
+BuildRequires:  pkgconfig(aom)
+BuildRequires:  pkgconfig(cairo)
+BuildRequires:  pkgconfig(fdk-aac)
+BuildRequires:  pkgconfig(fuse3)
+BuildRequires:  pkgconfig(krb5)
+BuildRequires:  pkgconfig(libcbor)
+BuildRequires:  pkgconfig(libfido2)
+BuildRequires:  pkgconfig(libpcsclite)
+BuildRequires:  pkgconfig(libpulse)
+BuildRequires:  pkgconfig(libsystemd)
+BuildRequires:  pkgconfig(libwebp)
+BuildRequires:  pkgconfig(libyuv)
+BuildRequires:  pkgconfig(openh264)
+BuildRequires:  pkgconfig(openssl)
+BuildRequires:  pkgconfig(opus)
+BuildRequires:  pkgconfig(soxr)
+BuildRequires:  pkgconfig(sso-mib)
+BuildRequires:  pkgconfig(wayland-client)
+BuildRequires:  pkgconfig(wayland-scanner)
+BuildRequires:  pkgconfig(xkbcommon)
+BuildRequires:  zlib-devel
 BuildRequires:  SDL3-devel
 BuildRequires:  SDL3_ttf-devel
 BuildRequires:  gtk4-devel
@@ -113,6 +151,12 @@ appstreamcli validate --no-net --pedantic \
 %{_bindir}/coffee-rdp-session
 %{_bindir}/coffee-rdp-auth
 %{_bindir}/coffee-rdp-op-askpass
+# Vendored FreeRDP (freerdp/freerdp-client/winpr), built from vendor/freerdp
+# and installed to a private, coffeerdp-owned directory rather than the
+# system libdir -- see FREERDP_VENDORING.md and the COFFEERDP_VENDOR_LIBDIR
+# comment in the top-level CMakeLists.txt. Never the system libdir: that
+# would file-conflict with a real freerdp-libs package if a user has one.
+%{_libdir}/coffeerdp/
 %{_datadir}/applications/com.codeneedscoffee.coffeerdp.manager.desktop
 %{_datadir}/applications/com.codeneedscoffee.coffeerdp.session.desktop
 %{_datadir}/metainfo/com.codeneedscoffee.coffeerdp.manager.metainfo.xml
