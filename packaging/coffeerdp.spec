@@ -1,6 +1,6 @@
 Name:           coffeerdp
 Version:        0.1.3
-Release:        1%{?dist}
+Release:        2%{?dist}
 Summary:        RDP client with durable Entra ID login, built on FreeRDP's SDL3 client
 
 License:        Apache-2.0
@@ -172,6 +172,15 @@ appstreamcli validate --no-net --pedantic \
 %{_datadir}/coffeerdp/resources
 
 %changelog
+* Thu Sep 03 2026 CodeNeedsCoffee <codeneedscoffee@gmail.com> - 0.1.3-2
+- Fix intermittent silent clipboard file-paste failures: retry a bounded
+  few times when a file-clipboard data request comes back CB_RESPONSE_FAIL
+  during a burst of rapid Windows-side ServerFormatList updates, instead of
+  giving up on the first race lost.
+- Add missing ffmpeg-devel BuildRequires (WITH_FFMPEG/WITH_VIDEO_FFMPEG are
+  forced ON for VAAPI hardware decode support) so Copr builds resolve it;
+  requires RPM Fusion Free enabled as an external repo on affected chroots.
+
 * Wed Sep 02 2026 CodeNeedsCoffee <codeneedscoffee@gmail.com> - 0.1.3-1
 - Add 1Password integration: NLA password autofill via
   FREERDP_ASKPASS/coffee-rdp-op-askpass, AAD WebView password and MFA/OTP
