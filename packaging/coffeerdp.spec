@@ -1,6 +1,6 @@
 Name:           coffeerdp
 Version:        0.1.3
-Release:        2%{?dist}
+Release:        3%{?dist}
 Summary:        RDP client with durable Entra ID login, built on FreeRDP's SDL3 client
 
 License:        Apache-2.0
@@ -172,6 +172,17 @@ appstreamcli validate --no-net --pedantic \
 %{_datadir}/coffeerdp/resources
 
 %changelog
+* Fri Sep 04 2026 CodeNeedsCoffee <codeneedscoffee@gmail.com> - 0.1.3-3
+- Fix SIGSEGV crash during clipboard file-copy: the 0.1.3-2 CB_RESPONSE_FAIL
+  retry loop could still be sleeping/waiting on a retry when the CLIPRDR
+  channel disconnected (e.g. session teardown or reconnect mid-copy), and
+  the next retry then dereferenced a clipboard channel context already
+  nulled out by teardown. The channel-context field is now cleared under
+  the same lock the retry loop holds around it, requests fail cleanly
+  instead of dereferencing null once the channel is gone, and the between-
+  retry delay now watches the disconnect signal instead of blindly
+  sleeping through it.
+
 * Thu Sep 03 2026 CodeNeedsCoffee <codeneedscoffee@gmail.com> - 0.1.3-2
 - Fix intermittent silent clipboard file-paste failures: retry a bounded
   few times when a file-clipboard data request comes back CB_RESPONSE_FAIL

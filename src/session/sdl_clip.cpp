@@ -169,7 +169,15 @@ bool sdlClip::uninit(CliprdrClientContext* clip)
 	WINPR_ASSERT(clip);
 	if (!cliprdr_file_context_uninit(_file, _ctx))
 		return false;
-	_ctx = nullptr;
+
+	{
+		/* ClipDataCb's retry loop can be mid-wait/retry on another thread
+		 * when the channel goes down; take the same lock it holds around
+		 * _ctx use so it always observes either a fully-valid _ctx or a
+		 * cleanly-null one, never a half-torn-down pointer. */
+		std::scoped_lock lock(_lock);
+		_ctx = nullptr;
+	}
 	clip->custom = nullptr;
 	return true;
 }
@@ -397,9 +405,17 @@ UINT sdlClip::SendDataRequest(uint32_t formatID, const std::string& mime)
 {
 	const CLIPRDR_FORMAT_DATA_REQUEST request = { { CB_TYPE_NONE, 0, 0 }, formatID };
 
+	/* Channel may have gone away concurrently (uninit() nulls _ctx under
+	 * this same lock on disconnect) -- fail cleanly instead of dereferencing
+	 * a null context. */
+	if (!_ctx)
+	{
+		WLog_Print(_log, WLOG_WARN, "clipboard channel no longer available, cancelling request");
+		return ERROR_INVALID_HANDLE;
+	}
+
 	_request_queue.emplace(formatID, mime);
 
-	WINPR_ASSERT(_ctx);
 	WINPR_ASSERT(_ctx->ClientFormatDataRequest);
 	UINT ret = _ctx->ClientFormatDataRequest(_ctx, &request);
 	if (ret != CHANNEL_RC_OK)
@@ -1027,7 +1043,13 @@ const void* sdlClip::ClipDataCb(void* userdata, const char* mime_type, size_t* s
 		WLog_Print(clip->_log, WLOG_DEBUG,
 		           "clipboard data request for %s failed, retrying (%d/%d)", mime_type,
 		           attempt + 1, maxAttempts);
-		Sleep(150);
+
+		/* Plain Sleep() here doesn't observe disconnect at all, letting the
+		 * loop wake up and retry against a channel that's already torn
+		 * down. Wait on the abort event instead so a disconnect mid-retry
+		 * ends the loop immediately. */
+		if (WaitForSingleObject(freerdp_abort_event(clip->_sdl->context()), 150) == WAIT_OBJECT_0)
+			return nullptr;
 	}
 
 	return nullptr;
