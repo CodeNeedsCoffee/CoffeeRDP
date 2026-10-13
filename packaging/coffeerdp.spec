@@ -1,6 +1,6 @@
 Name:           coffeerdp
 Version:        0.1.4
-Release:        1%{?dist}
+Release:        2%{?dist}
 Summary:        RDP client with durable Entra ID login, built on FreeRDP's SDL3 client
 
 License:        Apache-2.0
@@ -35,6 +35,9 @@ BuildRequires:  cups-devel
 BuildRequires:  gsm-devel
 BuildRequires:  lame-devel
 BuildRequires:  libicu-devel
+# libpng/libjpeg/libwebp: WinPR clipboard image conversion (PNG/JPEG/WebP <->
+# DIB), forced ON in the top-level CMakeLists.txt.
+BuildRequires:  libpng-devel
 BuildRequires:  libjpeg-turbo-devel
 BuildRequires:  turbojpeg-devel
 BuildRequires:  libX11-devel
@@ -172,6 +175,20 @@ appstreamcli validate --no-net --pedantic \
 %{_datadir}/coffeerdp/resources
 
 %changelog
+* Tue Oct 13 2026 CodeNeedsCoffee <codeneedscoffee@gmail.com> - 0.1.4-2
+- Fix screenshots (image/png) pasting as "nothing / empty clipboard" in both
+  directions. The vendored WinPR was built with PNG, JPEG and WebP conversion
+  all OFF, so it could only move image/bmp: Windows screenshots were offered
+  to Linux apps without image/png, and a Linux screenshot was announced to
+  Windows as CF_DIB and then answered "no image" when Windows asked for it.
+  Force WINPR_UTILS_IMAGE_PNG/JPEG/WEBP ON (new libpng-devel BuildRequires),
+  advertise only image formats this build can convert, and add
+  test-coffee-image-support so the package build fails if they ever drop out.
+- Line-buffer stdout in coffee-rdp-session. WinPR logs INFO to stdout, which
+  is fully buffered under the journal, so the 0.1.4-1 clipboard transfer
+  summaries (and every other INFO line) only appeared when the session
+  exited. WARN/ERROR were unaffected (stderr).
+
 * Tue Oct 13 2026 CodeNeedsCoffee <codeneedscoffee@gmail.com> - 0.1.4-1
 - Fix Windows-to-Linux paste returning stale text: after the server asked for
   Linux clipboard data, that data lingered in the shared clipboard store and

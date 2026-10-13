@@ -50,6 +50,16 @@ set(WITH_VAAPI ON CACHE BOOL "" FORCE)
 set(WITH_OPENH264 ON CACHE BOOL "" FORCE)
 set(WITH_WAYLAND ON CACHE BOOL "" FORCE)
 set(WITH_X11 ON CACHE BOOL "" FORCE)
+# Clipboard image conversion. WinPR's clipboard can only convert between
+# Windows DIB and the formats it was built with, and all three default OFF --
+# a build without them can only move image/bmp, but Linux screenshots and
+# most apps use image/png only. Without PNG, copying a screenshot either way
+# silently pastes nothing (the desktop is never offered image/png, and the
+# server's CF_DIB request is answered "no image"). test-coffee-image-support
+# fails the package build if any of these ever stops being compiled in.
+set(WINPR_UTILS_IMAGE_PNG ON CACHE BOOL "" FORCE)
+set(WINPR_UTILS_IMAGE_JPEG ON CACHE BOOL "" FORCE)
+set(WINPR_UTILS_IMAGE_WEBP ON CACHE BOOL "" FORCE)
 # OSS is a legacy audio API CoffeeRDP has no use for (PulseAudio/PipeWire/
 # ALSA cover real needs) -- and its channel CMakeLists.txt has an upstream
 # bug that only surfaces when vendored: it configures a template via

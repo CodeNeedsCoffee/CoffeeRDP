@@ -22,3 +22,8 @@ add_executable(test-coffee-clip-policy test_coffee_clip_policy.cpp)
 target_link_libraries(test-coffee-clip-policy PRIVATE coffee-clip-policy)
 
 add_test(NAME coffee-clip-policy COMMAND test-coffee-clip-policy)
+
+add_executable(test-coffee-image-support test_coffee_image_support.cpp)
+target_link_libraries(test-coffee-image-support PRIVATE winpr)
+
+add_test(NAME coffee-image-support COMMAND test-coffee-image-support)

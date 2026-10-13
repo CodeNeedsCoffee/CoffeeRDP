@@ -729,6 +729,13 @@ void handleDisplayBackendFlag(int argc, char* argv[])
 
 int main(int argc, char* argv[])
 {
+	/* WinPR's console logger sends INFO and below to stdout and WARN/ERROR to
+	 * stderr. Under the journal (or any pipe) stdout is fully buffered, so INFO
+	 * lines -- including the per-transfer clipboard summaries -- would only
+	 * show up when the buffer fills or the session exits, with timestamps from
+	 * long before. Line-buffer it so they arrive as they happen. */
+	(void)setvbuf(stdout, nullptr, _IOLBF, 0);
+
 #if defined(_WIN32)
 	sdl::win32::release_transient_console();
 #endif

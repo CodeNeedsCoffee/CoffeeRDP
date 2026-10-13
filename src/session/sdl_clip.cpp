@@ -312,11 +312,12 @@ bool sdlClip::handleEvent(const SDL_ClipboardEvent& ev)
 	std::string mime_html = s_mime_html;
 
 	std::vector<std::string> mime_bitmap = { BMP_MIME_LIST };
-	std::string mime_webp = s_mime_webp;
-	std::string mime_png = s_mime_png;
-	std::string mime_jpeg = s_mime_jpg;
-	std::string mime_tiff = s_mime_tiff;
-	std::vector<std::string> mime_images = { mime_webp, mime_png, mime_jpeg, mime_tiff };
+	/* Only advertise image formats WinPR can actually convert to/from a DIB
+	 * (s_mime_image() is filtered by what this build supports). This used to be
+	 * a fixed png/webp/jpeg/tiff list, so a build without PNG support announced
+	 * CF_DIB for a PNG screenshot and then had nothing to answer the server's
+	 * request with. */
+	std::vector<std::string> mime_images(s_mime_image().begin(), s_mime_image().end());
 
 	std::vector<std::string> clientFormatNames;
 	std::vector<CLIPRDR_FORMAT> clientFormats;
@@ -909,6 +910,14 @@ std::shared_ptr<BYTE> sdlClip::ReceiveFormatDataRequestHandle(
 	trace.mime(mime ? mime : "");
 
 	{
+		if (!mime)
+		{
+			/* e.g. HTML Format requested while the local clipboard holds neither
+			 * HTML nor a convertible image: nothing to hand SDL_GetClipboardData. */
+			trace.fail("no-local-data-for-format");
+			return data;
+		}
+
 		size_t size = 0;
 		auto sdldata = std::shared_ptr<void>(SDL_GetClipboardData(mime, &size), SDL_free);
 		if (!sdldata)
