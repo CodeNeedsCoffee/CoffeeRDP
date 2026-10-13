@@ -50,6 +50,14 @@ jobs:
       - name: Install RPM build tooling
         run: dnf -y install rpm-build rpmdevtools dnf-plugins-core
 
+      # coffeerdp.spec BuildRequires ffmpeg-devel, which Fedora's own repos
+      # don't carry (patent/licensing). The Copr project gets it from RPM
+      # Fusion Free configured as an external repo on each chroot; a plain
+      # fedora container has no such repo, so builddep failed with "No match
+      # for argument: ffmpeg-devel" until it was enabled here too.
+      - name: Enable RPM Fusion Free (ffmpeg-devel, same as the Copr chroots)
+        run: dnf -y install "https://mirrors.rpmfusion.org/free/fedora/rpmfusion-free-release-$(rpm -E %fedora).noarch.rpm"
+
       - name: Install coffeerdp.spec's BuildRequires
         run: dnf -y builddep packaging/coffeerdp.spec
 
