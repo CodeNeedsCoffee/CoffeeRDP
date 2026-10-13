@@ -751,6 +751,11 @@ int main(int argc, char* argv[])
 		return -1;
 	auto sdl = sdl_rdp->sdl;
 
+	/* First journal line of every session: which build is actually running.
+	 * Installed copies can silently shadow each other on PATH, so this is the
+	 * quick check that a fix has really shipped. */
+	WLog_Print(sdl->getWLog(), WLOG_INFO, "%s %s", SDL_CLIENT_NAME, SDL_CLIENT_VERSION);
+
 	auto settings = sdl->context()->settings;
 	WINPR_ASSERT(settings);
 

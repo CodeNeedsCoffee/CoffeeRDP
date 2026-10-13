@@ -38,6 +38,11 @@ target_link_libraries(coffee-idle PUBLIC coffee-rdp-file)
 # it only sets an environment variable FreeRDP's own codec reads on first use.
 add_library(coffee-hwdecode STATIC coffee_hwdecode.cpp coffee_hwdecode.hpp)
 
+# Clipboard data-request retry/failure-memo policy. Header-only, no
+# SDL/FreeRDP dependency -- sdl_clip.cpp links this, test/ exercises it.
+add_library(coffee-clip-policy INTERFACE)
+target_include_directories(coffee-clip-policy INTERFACE ${CMAKE_CURRENT_SOURCE_DIR})
+
 enable_testing()
 add_subdirectory(test)
 
@@ -69,8 +74,24 @@ set(SRCS
 
 set(WITH_WEBVIEW ON)
 set(SDL_CLIENT_BINARY_NAME "${MODULE_NAME}")
-set(FREERDP_VERSION_FULL "0.1.1")
-set(GIT_REVISION "coffeerdp")
+# Shown in SDL_CLIENT_VERSION and logged at session start, so "which build is
+# actually running?" is answerable from the journal. The version follows the
+# top-level project(); the revision is the RPM version-release when
+# packaging passes COFFEERDP_BUILD_REVISION (see packaging/coffeerdp.spec),
+# else the git short hash, else "unknown" (tarball with no .git).
+set(FREERDP_VERSION_FULL "${CoffeeRDP_VERSION}")
+if(NOT COFFEERDP_BUILD_REVISION)
+    execute_process(
+        COMMAND git rev-parse --short HEAD
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+        OUTPUT_VARIABLE COFFEERDP_BUILD_REVISION
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET)
+endif()
+if(NOT COFFEERDP_BUILD_REVISION)
+    set(COFFEERDP_BUILD_REVISION "unknown")
+endif()
+set(GIT_REVISION "${COFFEERDP_BUILD_REVISION}")
 set(VENDOR "CoffeeRDP")
 set(SDL_CLIENT_UUID "com.codeneedscoffee.coffeerdp.session")
 set(PROJECT_URL "")
@@ -92,6 +113,7 @@ target_link_libraries(${MODULE_NAME} PRIVATE
     coffee-idle
     coffee-hwdecode
     coffee-floatbar
+    coffee-clip-policy
     SDL3::SDL3
 )
 

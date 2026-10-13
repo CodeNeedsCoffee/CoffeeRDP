@@ -1,6 +1,6 @@
 Name:           coffeerdp
-Version:        0.1.3
-Release:        3%{?dist}
+Version:        0.1.4
+Release:        1%{?dist}
 Summary:        RDP client with durable Entra ID login, built on FreeRDP's SDL3 client
 
 License:        Apache-2.0
@@ -139,7 +139,7 @@ the window too.
 %autosetup -p1
 
 %build
-%cmake -GNinja
+%cmake -GNinja -DCOFFEERDP_BUILD_REVISION=%{version}-%{release}
 %cmake_build
 
 %install
@@ -172,6 +172,31 @@ appstreamcli validate --no-net --pedantic \
 %{_datadir}/coffeerdp/resources
 
 %changelog
+* Tue Oct 13 2026 CodeNeedsCoffee <codeneedscoffee@gmail.com> - 0.1.4-1
+- Fix Windows-to-Linux paste returning stale text: after the server asked for
+  Linux clipboard data, that data lingered in the shared clipboard store and
+  ClipDataCb's "convert from existing data" shortcut could hand it back as
+  if it were the new server clipboard. The shortcut now only runs when the
+  store holds data fetched from the server for the current format list.
+- Retry a refused (CB_RESPONSE_FAIL) clipboard data request for every mime
+  type, not just files. Text pastes were failing on the first server refusal
+  with no second try. A refusal also suppresses identical requests for one
+  second, so a consumer re-asking for sibling mimes (text/plain, UTF8_STRING,
+  STRING...) doesn't repeat the whole retry sequence per mime on the UI
+  thread.
+- Stop logging a WinPR "No synthesizer for format CF_RAW" ERROR on every
+  paste; it only meant the local clipboard store was empty.
+- clearServerFormats() now takes the clipboard and state locks it was
+  previously racing ClipDataCb on.
+- Log the client name, version and package release as the first line of
+  every session, so a shadowed or stale install is visible in the journal.
+- Clipboard diagnostics: one INFO line per transfer in both directions
+  ("clipboard server->local / local->server mime=... outcome=... bytes=...
+  attempts=... elapsed=...", WARN when it failed, with a reason such as
+  refused-by-server-gave-up or sdl-clipboard-empty), a summary of every
+  server format-list change, and channel init/ready/close events. Failure
+  paths that used to return silently now say why. Contents are never logged.
+
 * Fri Sep 04 2026 CodeNeedsCoffee <codeneedscoffee@gmail.com> - 0.1.3-3
 - Fix SIGSEGV crash during clipboard file-copy: the 0.1.3-2 CB_RESPONSE_FAIL
   retry loop could still be sleeping/waiting on a retry when the CLIPRDR

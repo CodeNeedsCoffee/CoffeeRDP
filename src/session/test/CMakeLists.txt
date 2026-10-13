@@ -17,3 +17,8 @@ add_executable(test-coffee-floatbar test_coffee_floatbar.cpp)
 target_link_libraries(test-coffee-floatbar PRIVATE coffee-floatbar)
 
 add_test(NAME coffee-floatbar COMMAND test-coffee-floatbar)
+
+add_executable(test-coffee-clip-policy test_coffee_clip_policy.cpp)
+target_link_libraries(test-coffee-clip-policy PRIVATE coffee-clip-policy)
+
+add_test(NAME coffee-clip-policy COMMAND test-coffee-clip-policy)

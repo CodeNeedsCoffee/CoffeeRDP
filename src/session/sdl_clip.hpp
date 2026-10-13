@@ -33,6 +33,7 @@
 
 #include "sdl_types.hpp"
 #include "sdl_utils.hpp"
+#include "coffee_clip_policy.hpp"
 
 /** @brief a clipboard format request */
 class ClipRequest
@@ -148,6 +149,18 @@ class sdlClip
 	CriticalSection _lock;
 
 	std::queue<ClipRequest> _request_queue;
+
+	/* True only while _system holds data fetched from the *server* for the
+	 * current server format list. _system also receives local (Linux-side)
+	 * data when the server asks for ours, and that lingers after the
+	 * clipboard flips back to the server -- ClipboardGetData() hands back
+	 * whatever is stored regardless of origin, so ClipDataCb must not use it
+	 * as an answer unless this is set. Guarded by _lock. */
+	bool _systemHoldsServerData = false;
+
+	/* Recently refused (server format, generation) requests; see
+	 * coffee_clip_policy.hpp. Guarded by _lock. */
+	coffee::clip::RecentFailureMemo _failureMemo;
 
 	struct cache_entry
 	{
